@@ -155,7 +155,7 @@ xmonadControlBindings =
     ,("M-;", gridselectWorkspace def W.view)
     ,("M-S-;", gridselectWorkspace def (W.shift))
     ,("M-S-C-;", gridselectWorkspace def (liftM2 (.) W.view W.shift))
-    ,("M-x f", sendMessage $ Toggle NBFULL)
+    ,("M-f", sendMessage $ Toggle NBFULL)
     ,("M-/", windowPromptGoto def)
     ,("M-<Space>", switchLayer)
     ]
