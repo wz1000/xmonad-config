@@ -100,13 +100,25 @@ manageApps = composeAll
     , resource =? "feh"                --> doIgnore
     , resource =? "dzen2"              --> doIgnore
     , resource =? "polybar"            --> doIgnore
-    , className =? "ncmpcpp"           --> placeHook ( fixed (1,35/1080) ) <+> doFloat
+    , className =? "ncmpcpp"           --> doRectFloat (centerAligned 0.5 (30/1080) (2/3) 0.6)
     , className =? "clerk"             --> placeHook ( fixed (0.5,55/1080) ) <+> doFloat
     , manageDocks
     ]
+    where
+      {-
+            x            x
+            |            |
+      y--+--+--+      y--+-----+
+         |     |         |     |
+         |     h   =>    |     h
+         |     |         |     |
+         +--w--+         +--w--+
+      -}
+      centerAligned x y w h =
+        W.RationalRect (x-w/2) y w h
 
 myManageHook = manageApps
-          <+> placeHook (inBounds (underMouse (0, 0)))
+          <+> placeHook (inBounds (underMouse (0.5, 0.5)))
           <+> manageHook def
           <+> scratchpadManageHookDefault
           <+> namedScratchpadManageHook scratchpads
@@ -137,7 +149,7 @@ appLaunchBindings =
     ,("M-S-e", spawn "emacsclient -c")
     ,("M-g", scratchpadSpawnActionCustom "termite --name scratchpad")
     ,("<Insert>", pasteSelection )
-    ,("<F10>", namedScratchpadAction scratchpads "clerk")
+    ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-<F12>", namedScratchpadAction scratchpads "wicd")
     ]
