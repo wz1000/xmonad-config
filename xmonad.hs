@@ -1,6 +1,7 @@
 import XMonad
 import qualified XMonad.StackSet as W
 import XMonad.Actions.CycleWS ( WSType(..), Direction1D(..), moveTo, toggleWS')
+import XMonad.Actions.CopyWindow
 import XMonad.Actions.GridSelect
 import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , centerNavigation
@@ -11,6 +12,9 @@ import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , switchLayer)
 import XMonad.Actions.Volume (lowerVolume, raiseVolume, toggleMute)
 import XMonad.Actions.SpawnOn
+import XMonad.Actions.Submap
+import XMonad.Actions.DynamicProjects
+import XMonad.Actions.DynamicWorkspaces
 import XMonad.Layout.Fullscreen ( fullscreenEventHook )
 import XMonad.Hooks.EwmhDesktops ( ewmh )
 import XMonad.Hooks.SetWMName   ( setWMName )
@@ -25,15 +29,19 @@ import XMonad.Layout.MultiToggle ( Toggle(..), mkToggle1 )
 import XMonad.Layout.MultiToggle.Instances ( StdTransformers(NBFULL) )
 import XMonad.Layout.NoBorders  ( smartBorders )
 import XMonad.Prompt.Shell  ( shellPrompt )
-import XMonad.Prompt.Window  ( windowPromptGoto )
+import XMonad.Prompt.Window
+import XMonad.Prompt.FuzzyMatch
+import XMonad.Prompt
 import XMonad.Util.EZConfig
 import XMonad.Util.Scratchpad
 import XMonad.Util.NamedScratchpad
-import XMonad.Util.Paste ( pasteSelection )
+import qualified XMonad.Util.ExtensibleState as ES
+import XMonad.Util.Paste
 
 import Spacing
 
 import Control.Monad (void, liftM2)
+import qualified Data.Map as M
 
 startupApps = ["dunst"
               ,"pkill compton; compton"
@@ -45,11 +53,16 @@ startupApps = ["dunst"
 main :: IO ()
 main = do
     xmonad
+     $ dynamicProjects []
      $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
      $ docks
+--     $ modal regularMode
+     $ addModal
      $ ewmh def
-        { terminal        = "termite"
+        { terminal        = "kitty"
         , borderWidth     = 2
+        , focusedBorderColor = "#cccccc"
+        , normalBorderColor = "#2b2b2b"
         , modMask         = mod4Mask
         , layoutHook      = myLayout
         , workspaces      = myWorkspaces
@@ -57,17 +70,20 @@ main = do
         , handleEventHook = fullscreenEventHook
         , startupHook     = setWMName "LG3D" >> mapM_ spawn startupApps
         } `additionalKeysP` myKeyBindings
+          `removeKeysP` [pref ++ [n] | pref <- ["M-S-","M-"], n <- ['1'..'9']]
+
+addModal c = additionalKeysP c [("M-.", enterNavMode c)]
 
 myWorkspaces =
-    zipWith (\i w -> show i ++ ". " ++ w)
-            [1..]
-            ["Main"
-            ,"IRC"
-            ,"Web"
-            ,"Dev"
-            ,"Conf"
-            ,"Play"
-            ,"Media"
+--    zipWith (\i w -> show i ++ ". " ++ w)
+--            [1..]
+            ["main"
+            ,"irc"
+            ,"web"
+            ,"dev"
+            ,"conf"
+            ,"play"
+            ,"media"
             ]
 
 myLayout = smartBorders
@@ -80,9 +96,9 @@ myLayout = smartBorders
 
 scratchpads = 
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
-  , NS "ncmpcpp" "termite --class=ncmpcpp -e ncmpcpp" (className =? "ncmpcpp") defaultFloating
+  , NS "ncmpcpp" "kitty --class=ncmpcpp -e ncmpcpp" (className =? "ncmpcpp") defaultFloating
   , NS "wicd" "wicd-client --no-tray" (resource =? "wicd-client.py") defaultFloating
-  , NS "clerk" "termite --class=clerk -e clerk" (className =? "clerk") defaultFloating
+  , NS "clerk" "kitty --class=clerk -e clerk" (className =? "clerk") defaultFloating
   ]
 
 manageApps = composeAll
@@ -94,7 +110,7 @@ manageApps = composeAll
     , resource =? "htop"               --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "alsamixer"          --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "nethogs"            --> placeHook ( fixed (1,35/1080) ) <+> doFloat
-    , resource =? "ncmpcpp"            --> placeHook ( fixed (1,35/1080) ) <+> doFloat
+    -- , resource =? "ncmpcpp"            --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "progress"           --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "runner"             --> placeHook ( fixed (0,1) ) <+> doFloat
     , resource =? "feh"                --> doIgnore
@@ -118,11 +134,10 @@ manageApps = composeAll
         W.RationalRect (x-w/2) y w h
 
 myManageHook = manageApps
-          <+> placeHook (inBounds (underMouse (0.5, 0.5)))
-          <+> manageHook def
-          <+> scratchpadManageHookDefault
-          <+> namedScratchpadManageHook scratchpads
-
+           <+> placeHook (inBounds (underMouse (0.5, 0.5)))
+           <+> manageHook def
+           <+> scratchpadManageHookDefault
+           <+> namedScratchpadManageHook scratchpads
 
 restartXMonad = concat
   ["cd ~/.xmonad/; "
@@ -136,41 +151,84 @@ restartXMonad = concat
 myKeyBindings = concat
     [ xmonadControlBindings
     , appLaunchBindings
-    , windowMoveBindings
+    , windowBindings
     , mediaBindings
-    , bspControlBindings
     ]
 
+{-
+regularMode c = Mode "regular" GrabBound $ mkKeymap c $
+  [("M-.", setTo (navMode c))
+  ]
+
+navMode c = Mode "nav" GrabAll $ mkKeymap c $ concat
+  [ windowKeys 
+  , bspKeys
+  , xmonadControlKeys
+  , [("<Esc>", setTo (regularMode c))]
+  ]
+-}
+
+enterNavMode c = mkModalBindings c "<Esc>" $ concat
+  [ windowKeys 
+  , bspKeys
+  , xmonadControlKeys
+  ]
+
 appLaunchBindings =
-    [("M-S-t", spawn "termite")
-    ,("M-<Return>", spawn "termite")
+    [("M-S-t", spawn "kitty")
+    ,("M-<Return>", spawn "kitty")
     ,("M-S-b", spawn "firefox")
     ,("M-S-k", spawn "xkill")
     ,("M-S-e", spawn "emacsclient -c")
-    ,("M-g", scratchpadSpawnActionCustom "termite --name scratchpad")
+    ,("M-g", scratchpadSpawnActionCustom "kitty --name scratchpad")
     ,("<Insert>", pasteSelection )
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-<F12>", namedScratchpadAction scratchpads "wicd")
+    ,("M-q", spawn restartXMonad)
+    ,("M-r", shellPrompt myXPConfig)
     ]
 
-xmonadControlBindings =
-    [("M-q", spawn restartXMonad)
-    ,("M-r", shellPrompt def)
-    ,("M-n", moveTo Next NonEmptyWS)
-    ,("M-p", moveTo Prev NonEmptyWS)
-    ,("M-c", moveTo Next EmptyWS)
-    ,("M-`", toggleWS' ["NSP"])
-    ,("M-S-x",kill)
-    ,("M-C-d", sendMessage $ SPACING $ negate 5)
-    ,("M-C-i", sendMessage $ SPACING 5)
-    ,("M-;", gridselectWorkspace def W.view)
-    ,("M-S-;", gridselectWorkspace def (W.shift))
-    ,("M-S-C-;", gridselectWorkspace def (liftM2 (.) W.view W.shift))
-    ,("M-f", sendMessage $ Toggle NBFULL)
-    ,("M-/", windowPromptGoto def)
-    ,("M-<Space>", switchLayer)
+xmonadControlBindings = addSuperPrefix xmonadControlKeys
+
+xmonadControlKeys =
+    [("n", moveTo Next NonEmptyWS)
+    ,("p", moveTo Prev NonEmptyWS)
+    ,("`", toggleWS' ["NSP"])
+    ,("S-x", kill1)
+    ,("x", killCopy)
+    ,("C-d", sendMessage $ SPACING $ negate 5)
+    ,("C-i", sendMessage $ SPACING 5)
+    ,("S-d", removeWorkspace)
+    ,(";", switchProjectPrompt myXPConfig)
+    ,("d", changeProjectDirPrompt myXPConfig)
+    ,("w", shiftToProjectPrompt myXPConfig)
+    ,("e", gridselectWorkspace def W.view)
+    ,("f", sendMessage $ Toggle NBFULL)
+    ,("/", windowPrompt highlightConfig Goto allWindows)
+    ,("S-/", windowPrompt highlightConfig Bring allWindows)
+    ,("\\", windowMultiPrompt highlightConfig [(BringCopy,allWindows),(Bring,allWindows)])
+    ,("<Space>", switchLayer)
     ]
+
+bspKeys =
+  [("e", sendMessage BSP.Equalize)
+  ,("r", sendMessage BSP.Rotate)
+  ,("s", sendMessage BSP.Swap)
+  ,("u", sendMessage BSP.FocusParent)
+  ,("v", sendMessage BSP.MoveNode)
+  ,("c", sendMessage BSP.SelectNode)
+  ]
+
+windowBindings = addSuperPrefix windowKeys
+
+windowKeys = do
+  (key,dir) <- zip "hjkl" [L,D,U,R]
+  id [([key], windowGo   dir False)
+     ,("S-"++[key], windowSwap dir False)
+     ,("C-"++[key], sendMessage $ BSP.MoveSplit dir)
+     ,("M1-"++[key], sendMessage $ BSP.ExpandTowards dir)
+     ]
 
 mediaBindings =
     [("<XF86AudioNext>", spawn "mpc next")
@@ -186,23 +244,29 @@ mediaBindings =
     ,("M-m", spawn "clerk -t")
     ]
 
-windowMoveBindings = do
-    (key,dir) <- zip "hjkl" [L,D,U,R]
-    id [("M-"  ++[key], windowGo   dir False)
-       ,("M-S-"++[key], windowSwap dir False)
-       ]
+mkModalBindings :: XConfig l -> String -> [(String, X ())] -> X ()
+mkModalBindings conf exitBind xs = enterMode
+  where
+    xs' = map (\(bind,action) -> (bind,action >> enterMode)) xs
+    keymap = mkKeymap conf ((exitBind,return ()) : xs')
+    enterMode = submapDefault enterMode keymap
 
-bspControlBindings = 
-    [("M-b e", sendMessage BSP.Equalize)
-    ,("M-b r", sendMessage BSP.Rotate)
-    ,("M-b s", sendMessage BSP.Swap)
-    ,("M-b p", sendMessage BSP.FocusParent)
-    ,("M-M1-h", sendMessage $ BSP.ExpandTowards L)
-    ,("M-M1-j", sendMessage $ BSP.ExpandTowards D)
-    ,("M-M1-k", sendMessage $ BSP.ExpandTowards U)
-    ,("M-M1-l", sendMessage $ BSP.ExpandTowards R)
-    ,("M-C-h", sendMessage $ BSP.MoveSplit L)
-    ,("M-C-j", sendMessage $ BSP.MoveSplit D)
-    ,("M-C-k", sendMessage $ BSP.MoveSplit U)
-    ,("M-C-l", sendMessage $ BSP.MoveSplit R)
-    ]
+myXPConfig = def { position = CenteredAt 0.5 0.5
+                 , bgColor = "#333333"
+                 , borderColor = "#303030"
+                 , promptBorderWidth = 2
+                 , font = "xft:Source Code Pro-10"
+                 , height = 22
+                 , searchPredicate = fuzzyMatch }
+highlightConfig = myXPConfig{alwaysHighlight = True}
+
+addSuperPrefix = map (\(b,a) -> ("M-"++b,a)) 
+
+killCopy :: X ()
+killCopy = do
+    ss <- gets windowset 
+    whenJust (W.peek ss) $ 
+      \w -> if W.member w $ delete'' w ss
+            then windows $ delete'' w
+            else return ()
+  where delete'' w = W.modify Nothing (W.filter (/= w))
