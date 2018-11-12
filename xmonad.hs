@@ -137,7 +137,7 @@ myLayout = trackFloating $ smartBorders
           where
               layouts = addTabs shrinkText myTabTheme
                 $ subLayout [] Simplest myTall
-              myTall = spacing 15 $ resizable 40 5
+              myTall = spacing 15 $ resizable 40 4
               resizable step n = ResizableTall 1 (1/step) ((1/2)+n/step) []
               -- ^ n is no of step-lengths right of center, which is used as the
               -- default split ratio
