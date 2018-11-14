@@ -64,7 +64,7 @@ runInTerm x = "kitty -e sh -c '" ++ x ++ "'"
 runInTerm' x = "kitty --class mpvslave -e sh -c '" ++ x ++ "'"
 
 sshCommand = runInTerm
-  "TERM=xterm ssh -i .ssh/google_compute_engine zubin@35.200.137.37 -t tmux attach"
+  "TERM=xterm ssh -i ~/.ssh/google_compute_engine $(cat ~/.ssh/gcehost) -t tmux attach"
 
 staticProjects :: [Project]
 staticProjects =
@@ -112,12 +112,6 @@ raiseFloating w = do
 updateMode = do
   mode <- ES.gets M.label
   io $ appendFile "/tmp/.xmonad-mode-log" (mode ++ "\n")
-
-mergeMPV = do
-  b <- ES.gets shouldMerge
-  when b $ do
-    ES.put (MergeHook False)
-    combineMPV
 
 myWorkspaces =
             ["main"
@@ -175,10 +169,6 @@ runAllPending = do
   PendingActions xs <- ES.get
   ES.put (PendingActions [])
   sequence_ xs
-
-newtype MergeHook = MergeHook {shouldMerge :: Bool}
-instance ExtensionClass MergeHook where
-  initialValue = MergeHook False
 
 manageApps = composeAll
     [ isFullscreen                     --> doFullFloat
