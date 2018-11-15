@@ -54,14 +54,14 @@ import Data.Monoid
 import System.IO
 
 startupApps = ["dunst"
-              ,"pkill compton; compton"
+              ,"pkill compton; exec compton"
               ,"pulseaudio --start"
               ,"feh --randomize --bg-fill ~/.wallpapers/*"
-              ,"pkill polybar; polybar example"
+              ,"pkill polybar; exec polybar example"
               ]
 
-runInTerm x = "kitty -e sh -c '" ++ x ++ "'"
-runInTerm' x = "kitty --class mpvslave -e sh -c '" ++ x ++ "'"
+runInTerm x = "kitty -1 -e sh -c '" ++ x ++ "'"
+runInTerm' x = "kitty -1 --class mpvslave -e sh -c '" ++ x ++ "'"
 
 sshCommand = runInTerm
   "TERM=xterm ssh -i ~/.ssh/google_compute_engine $(cat ~/.ssh/gcehost) -t tmux attach"
@@ -137,9 +137,9 @@ myLayout = trackFloating $ smartBorders
               -- default split ratio
 scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
-  , NS "ncmpcpp" "kitty --class=ncmpcpp -e ncmpcpp" (className =? "ncmpcpp") defaultFloating
+  , NS "ncmpcpp" "kitty -1 --class=ncmpcpp -e ncmpcpp" (className =? "ncmpcpp") defaultFloating
   , NS "wicd" "wicd-client --no-tray" (resource =? "wicd-client.py") defaultFloating
-  , NS "clerk" "kitty --class=clerk -e clerk" (className =? "clerk") defaultFloating
+  , NS "clerk" "kitty -1 --class=clerk -e clerk" (className =? "clerk") defaultFloating
   ]
 
 combineMPV :: X ()
@@ -223,7 +223,7 @@ raiseNew = do
     then W.shiftMaster $ W.focusWindow w ws
     else ws
 
-restartXMonad = spawn $ "kitty --name xmonadrestart -e /home/zubin/.xmonad/restart.sh"
+restartXMonad = spawn $ "kitty -1 --name xmonadrestart -e /home/zubin/.xmonad/restart.sh"
 
 myKeyBindings = concat
     [ xmonadControlBindings
@@ -262,13 +262,13 @@ navMode c = Mode "%{F#fa0 R}nav%{R F-}" GrabBound $ additions
       ]
 
 appLaunchBindings =
-    [("M-S-t", spawnHere "kitty")
-    ,("M-<Return>", spawnHere "kitty")
-    ,("M-z", spawnHere "kitty")
+    [("M-S-t", spawnHere "kitty -1")
+    ,("M-<Return>", spawnHere "kitty -1")
+    ,("M-z", spawnHere "kitty -1")
     ,("M-S-b", spawnHere "firefox")
     ,("M-S-k", spawn "xkill")
     ,("M-S-e", spawnHere "emacsclient -c")
-    ,("M-g", scratchpadSpawnActionCustom "cd ~; kitty --name scratchpad")
+    ,("M-g", scratchpadSpawnActionCustom "cd ~; kitty -1 --name scratchpad")
     ,("<Insert>", pasteSelection )
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
