@@ -5,6 +5,8 @@ import XMonad.Actions.CopyWindow
 import XMonad.Actions.GridSelect
 import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , centerNavigation
+                                   , sideNavigation
+                                   , hybridOf
                                    , Navigation2DConfig(..)
                                    , windowGo
                                    , windowSwap
@@ -13,24 +15,28 @@ import XMonad.Actions.Navigation2D ( withNavigation2DConfig
 import XMonad.Actions.Volume (lowerVolume, raiseVolume, toggleMute)
 import XMonad.Actions.SpawnOn
 import XMonad.Actions.Submap
+import XMonad.Actions.DwmPromote
 import XMonad.Actions.DynamicProjects
 import XMonad.Actions.DynamicWorkspaces
-import XMonad.Actions.UpdateFocus
+--import XMonad.Actions.UpdateFocus
 import XMonad.Layout.Fullscreen ( fullscreenEventHook )
 import XMonad.Layout.Simplest
 import XMonad.Hooks.EwmhDesktops ( ewmh )
 import XMonad.Hooks.SetWMName   ( setWMName )
-import XMonad.Hooks.ManageDocks ( avoidStruts, docks, manageDocks )
+import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ManageHelpers
 import XMonad.Hooks.InsertPosition
 import XMonad.Hooks.Place
 import XMonad.Hooks.ToggleHook
 import XMonad.Layout.BorderResize ( borderResize )
 import XMonad.Layout.ToggleLayouts
+import XMonad.Layout.MultiToggle
+import qualified XMonad.Layout.MultiToggle as MT
+import XMonad.Layout.MultiToggle.Instances
 import XMonad.Layout.Tabbed
 import XMonad.Layout.SubLayouts
 import XMonad.Layout.StateFull
-import XMonad.Layout.ResizableTile
+import XMonad.Layout.ResizableTileSub
 import XMonad.Layout.NoBorders  ( smartBorders )
 import XMonad.Prompt.Shell  ( shellPrompt )
 import XMonad.Prompt.Window
@@ -40,6 +46,7 @@ import XMonad.Util.EZConfig
 import XMonad.Util.Run ( safeSpawn )
 import XMonad.Util.Scratchpad
 import XMonad.Util.NamedScratchpad
+import XMonad.Util.Invisible
 import qualified XMonad.Util.ExtensibleState as ES
 import XMonad.Util.Paste
 
@@ -54,23 +61,30 @@ import Data.Maybe
 import Data.Typeable
 import Data.Monoid
 import System.IO
+import System.Posix.Types (ProcessID)
 
 startupApps = ["dunst"
               ,"pkill compton; exec compton"
-              ,"feh --randomize --bg-fill ~/.wallpapers/*"
+              ,"feh --randomize --bg-fill ~/.wallpapers/O7sXAEZ.png"
               ,"pkill polybar; exec polybar example"
               ]
 
-runInTerm x = myTerm ++ " -e sh -c '" ++ x ++ "'"
-runInTerm' x = myTerm ++ " --class mpvslave -e sh -c '" ++ x ++ "'"
+runInTerm t x = myTerm ++ " --title " ++ t ++ " -e sh -c '" ++ x ++ "'"
+mpvRunner x = myTerm ++ " --title mpvslave --class mpvslave -e sh -c '" ++ x ++ "'"
 
-sshCommand = runInTerm
-  "TERM=xterm ssh -i ~/.ssh/google_compute_engine $(cat ~/.ssh/gcehost) -t tmux attach"
+sshCommand = runInTerm "weechat"
+  "TERM=xterm-256color mosh -p 53 --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
 
 staticProjects :: [Project]
 staticProjects =
-  [ Project "web" "~" (Just $ spawnOn "web" "firefox")
+  [ Project "main" "~" Nothing
+  , Project "web" "~" (Just $ spawnOn "web" "firefox")
+  , Project "mail" "~" (Just $ spawnOn "mail" $ runInTerm "neomutt" "neomutt")
   , Project "irc" "~" (Just $ spawnOn "irc" sshCommand)
+  , Project "dev" "~" Nothing
+  , Project "conf" "~" Nothing
+  , Project "play" "~" Nothing
+  , Project "media" "~" Nothing
   ]
 
 myTerm = "kitty -1"
@@ -84,7 +98,7 @@ main = do
 
     xmonad
      $ dynamicProjects ps
-     $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
+     $ withNavigation2DConfig ( def { defaultTiledNavigation = hybridOf sideNavigation centerNavigation } )
      $ docks
      $ modal regularMode
      $ (ewmh def
@@ -92,21 +106,52 @@ main = do
         , borderWidth     = 2
         , focusedBorderColor = "#cccccc"
         , normalBorderColor = "#2b2b2b"
+        , rootMask = rootMask def .|. pointerMotionMask
+        , clientMask = clientMask def .|. pointerMotionMask
         , modMask         = mod4Mask
         , layoutHook      = myLayout
         , workspaces      = myWorkspaces
         , manageHook      = myManageHook
-        , handleEventHook = focusOnMouseMove
+        , handleEventHook = handleEventHook def
         , logHook         = updateMode <> colorMarked <> runAllPending <> windowHistoryHook
         , startupHook     = do
             setWMName "LG3D"
             mapM_ spawn startupApps
-            adjustEventInput
         } `additionalKeysP` myKeyBindings
           `additionalMouseBindings` myMouseBindings
           )-- `removeKeysP` [pref ++ [n] | pref <- ["M-S-","M-"], n <- ['1'..'9']])
 
 myMouseBindings = []
+
+isCurMirrored :: X Bool
+isCurMirrored = do
+  w <- gets (W.currentTag . windowset)
+  ES.gets (M.findWithDefault False w . getMirrored)
+
+newtype Mirrored = Mirrored { getMirrored :: M.Map WorkspaceId Bool } deriving (Read, Show, Typeable)
+instance ExtensionClass Mirrored where
+  initialValue = Mirrored mempty
+  extensionType = PersistentExtension
+
+mirrorLayout = do
+  w <- gets (W.currentTag . windowset)
+  sendMessage $ MT.Toggle MIRROR
+  let invertor Nothing = Just True
+      invertor (Just x) = Just (not x)
+  ES.modify (Mirrored . M.alter invertor w . getMirrored)
+
+resizeIn :: Direction2D -> X ()
+resizeIn d = do
+  m <- isCurMirrored
+  case (d,m) of
+    (L,False) -> sendMessage Shrink
+    (R,False) -> sendMessage Expand
+    (U,False) -> sendMessage MirrorExpand
+    (D,False) -> sendMessage MirrorShrink
+    (L, True) -> sendMessage MirrorExpand
+    (R, True) -> sendMessage MirrorShrink
+    (U, True) -> sendMessage Shrink
+    (D, True) -> sendMessage Expand
 
 newtype FocusHistory = FH { getFocusHistory :: [Window] } deriving (Read, Show, Typeable)
 instance ExtensionClass FocusHistory where
@@ -146,9 +191,16 @@ raiseFloating w = do
 updateMode = do
   mode <- ES.gets M.label
   willMerge <- willHookNext "merge"
+  m <- isCurMirrored
+  let layouticon = "%{T3}"++(if m then "\57354" else "\57353")++"%{T-}"
+  let modeColor = case mode of
+        "nav" -> "#fa0"
+        "minimal" -> "#f40"
+        _ -> "#cacaca"
+  let prettyMode = "%{F"++modeColor ++ " R}\57532" ++ layouticon ++ " " ++ mode ++ "\57534%{RF-}"
   if willMerge
-  then io $ appendFile "/tmp/.xmonad-mode-log" (mode ++ " merge\n")
-  else io $ appendFile "/tmp/.xmonad-mode-log" (mode ++ "\n")
+  then io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ " merge\n")
+  else io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ "\n")
 
 colorMarked = getMarked >>= mapM_ makeBorderRed
 
@@ -156,22 +208,24 @@ myWorkspaces =
             ["main"
             ,"irc"
             ,"web"
+            ,"mail"
             ,"dev"
             ,"conf"
             ,"play"
             ,"media"
             ]
 
-myLayout = smartBorders
+myLayout = mkToggle1 NOBORDERS
+         $ smartBorders
          $ borderResize
          $ toggleLayouts (StateFull)
          $ avoidStruts
          $ layouts
           where
-              layouts = focusTracking $ addTabs shrinkText myTabTheme
-                $ subLayout [] Simplest myTall
-              myTall = spacing 5 $ resizable 40 5
-              resizable step n = ResizableTall 1 (1/step) ((1/2)+n/step) []
+              layouts = addTabs shrinkText myTabTheme
+                $ subLayout [] Simplest $ mkToggle1 MIRROR myTall
+              myTall = spacing 0 $ resizable 40 5
+              resizable step n = ResizableTall 1 (1/step) ((1/2)+n/step) [] (I [])
               -- ^ n is no of step-lengths right of center, which is used as the
               -- default split ratio
 scratchpads =
@@ -223,8 +277,8 @@ manageApps = composeAll
     [ isFullscreen                     --> doFullFloat
     , resource =? "dmenu"              --> doFloat
     , resource =? "mpvytdl"            --> markMpvMerge
-    , resource =? "pavucontrol"        --> placeHook ( fixed (1,85/1080) ) <+> doFloat
-    , resource =? "wicd-client.py"     --> placeHook ( fixed (1,85/1080) ) <+> doFloat
+    , resource =? "pavucontrol"        --> placeHook ( fixed (1,45/1080) ) <+> doFloat
+    , resource =? "wicd-client.py"     --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "gsimplecal"         --> placeHook ( fixed (1,35/1080) )
     , resource =? "htop"               --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "alsamixer"          --> placeHook ( fixed (1,35/1080) ) <+> doFloat
@@ -237,7 +291,7 @@ manageApps = composeAll
     , resource =? "scratchpad"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
-    , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (30/1080) (2/3) 0.6)
+    , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (15/1080) (2/3) 0.6)
     , resource =? "clerk"              --> placeHook ( fixed (0.5,55/1080) ) <+> doFloat
     , resource =? "zathura"            --> mergeIntoFocused
     , manageDocks
@@ -275,7 +329,11 @@ raiseNew = do
     then W.shiftMaster $ W.focusWindow w ws
     else ws
 
-restartXMonad = spawn $ myTerm++" --class xmonadrestart -e /home/zubin/.xmonad/restart.sh"
+restartXMonad = do
+  broadcastMessage ReleaseResources
+  io . flush =<< asks display
+  writeStateToFile
+  spawn (myTerm++" --class xmonadrestart -e /home/zubin/.xmonad/restart.sh")
 
 myKeyBindings = concat
     [ xmonadControlBindings
@@ -295,14 +353,14 @@ regularMode c = Mode "normal" GrabBound $ M.union additions (keys c c)
       ,("M-S-<Esc>", setMode (minimalMode c))
       ]
 
-minimalMode c = Mode "%{F#f40 R}minimal%{R F-}" GrabBound $ additions
+minimalMode c = Mode "minimal" GrabBound $ additions
   where
     additions = mkKeymap c $
       [("<Esc>", setMode (regularMode c))
       ,("M-<Esc>", setMode (regularMode c))
       ]
 
-navMode c = Mode "%{F#fa0 R}nav%{R F-}" GrabBound $ additions
+navMode c = Mode "nav" GrabBound $ additions
   where
     additions = mkKeymap c $ concat
       [ windowKeys
@@ -317,18 +375,21 @@ appLaunchBindings =
     [("M-S-t", hookNext "merge" True >> spawnHere myTerm)
     ,("M-<Return>", spawnHere myTerm)
     ,("M-S-b", spawnHere "firefox")
-    ,("M-S-e", hookNext "merge" True >> spawnHere "kitty -e zsh -c 'kak $(fzf)'")
+    ,("M-S-e", hookNext "merge" True >> spawnHere "kitty -e zsh -ic 'e'")
     ,("M-u", spawn "kitty --class unicodeinp -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
-    ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",myTerm,"--class scratchpad"])
+    ,("M-S-f", spawnHere $ runInTerm "ranger" "ranger")
+    ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",myTerm,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-<F12>", namedScratchpadAction scratchpads "wicd")
     ,("M-q", restartXMonad)
     ,("M-r", shellPrompt myXPConfig)
-    ,("M-v", spawn $ runInTerm' "~/scripts/playvid.sh")
-    ,("M-S-g", spawn $ runInTerm "~/scripts/download.sh $(xsel --output --clipboard)")
-    ,("M-S-p", spawn "rofi-pass")
+    ,("M-v", spawn $ mpvRunner "~/scripts/playvid.sh")
+    ,("M-S-=", spawn $ "~/scripts/html.sh")
+    ,("M-S-g", spawn $ runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
+    ,("M-C-p", spawn "rofi-pass")
+    ,("M-S-s", saveWindows)
     ]
 
 makeBorderRed :: Window -> X ()
@@ -347,28 +408,32 @@ makeBorderFocused w =
 xmonadControlBindings = addSuperPrefix xmonadControlKeys
 
 xmonadControlKeys =
-    [("n", moveTo Next NonEmptyWS)
-    ,("p", moveTo Prev NonEmptyWS)
-    ,("C-n", moveTo Next AnyWS)
-    ,("C-p", moveTo Prev AnyWS)
+    [("n", windows W.focusDown)
+    ,("p", windows W.focusUp)
+    ,("S-n", windows W.swapDown)
+    ,("S-p", windows W.swapUp)
     ,("`", toggleWS' ["NSP"])
     ,("S-x", kill1)
+    ,("C-<Return>", dwmpromote )
     ,("S-m", toggleHookNext "merge" >> updateMode )
     ,("S-r", refresh)
     ,("x", killCopy)
     ,("C-d", sendMessage $ SPACING $ negate 5)
     ,("C-i", sendMessage $ SPACING 5)
+    ,("b", sendMessage (MT.Toggle NOBORDERS) >> sendMessage ToggleStruts)
+    ,("z", mirrorLayout >> updateMode )
     ,("C-S-d", removeWorkspace >> saveProjectState)
     ,(";", switchProjectPrompt myXPConfig >> saveProjectState)
     ,("d", changeProjectDirPrompt myXPConfig >> saveProjectState)
     ,("w", shiftToProjectPrompt myXPConfig)
-    ,("e", gridselectWorkspace def W.view)
+    ,("e", dwmpromote )
     ,("f", sendMessage $ ToggleLayout)
     ,("/", windowPrompt highlightConfig Goto allWindows)
     ,("S-/", windowPrompt highlightConfig Bring allWindows)
     ,("\\", windowMultiPrompt highlightConfig [(BringCopy,allWindows),(Bring,allWindows)])
     ,("<Space>", switchLayer)
     ,("S-<Space>", sendMessage NextLayout)
+    ,("C-S-<Space>", sendMessage FirstLayout)
     ,("'", markFocused)
     ,("a", mergeMarked)
     ,("s", swapWithMarked)
@@ -377,14 +442,14 @@ xmonadControlKeys =
     ,("S-a", unmergeFocused)
     ,("[", onGroup W.focusUp')
     ,("]", onGroup W.focusDown')
-    ,("{", onGroup swapUp')
-    ,("}", onGroup swapDown')
+    ,("S-[", onGroup swapUp')
+    ,("S-]", onGroup swapDown')
     ,(".", sendMessage $ IncMasterN 1)
     ,(",", sendMessage $ IncMasterN (-1))
-    ,("C-l", sendMessage Expand)
-    ,("C-h", sendMessage Shrink)
-    ,("C-k", sendMessage MirrorExpand)
-    ,("C-j", sendMessage MirrorShrink)
+    ,("C-l", resizeIn R)
+    ,("C-h", resizeIn L)
+    ,("C-k", resizeIn U)
+    ,("C-j", resizeIn D)
     ]
 
 windowBindings = addSuperPrefix windowKeys
@@ -394,6 +459,22 @@ windowKeys = do
   id [([key], windowGo   dir False)
      ,("S-"++[key], windowSwap dir False)
      ]
+
+saveQuery :: Query (Maybe ProcessID)
+saveQuery = do
+  willSave <- resource =? "zathura" <||> className =? "mpv"
+  if willSave
+  then pid
+  else return Nothing
+
+saveWindows = do
+  curws <- gets $ W.index . windowset
+  forM_ curws $ \w -> do
+    mpid <- runQuery saveQuery w
+    case mpid of
+      Nothing -> return ()
+      Just pid -> spawn $ "~/scripts/getcommand.sh " ++ show pid
+
 
 mediaBindings =
     [("<XF86AudioNext>", spawn "mpc next")
@@ -446,7 +527,7 @@ readDynamicProjects staticPs = do
       l <- ls
       ((name,dir),"") <- reads l
       return $ case M.lookup name staticMap of
-        Nothing -> Project name dir Nothing
+        Nothing -> Project name dir (Just $ pure ())
         Just p -> Project name dir (projectStartHook p)
     finalMap = foldr (\p -> M.insert (projectName p) p) staticMap ps
 
