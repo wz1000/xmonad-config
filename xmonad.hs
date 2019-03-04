@@ -21,7 +21,7 @@ import XMonad.Actions.DynamicWorkspaces
 --import XMonad.Actions.UpdateFocus
 import XMonad.Layout.Fullscreen ( fullscreenEventHook )
 import XMonad.Layout.Simplest
-import XMonad.Hooks.EwmhDesktops ( ewmh )
+import XMonad.Hooks.EwmhDesktops
 import XMonad.Hooks.SetWMName   ( setWMName )
 import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ManageHelpers
@@ -62,6 +62,8 @@ import Data.Typeable
 import Data.Monoid
 import System.IO
 import System.Posix.Types (ProcessID)
+import System.FilePath
+import System.Directory
 
 startupApps = ["dunst"
               ,"pkill compton; exec compton"
@@ -90,6 +92,16 @@ staticProjects =
 myTerm = "kitty -1"
 -- myTerm = "alacritty"
 
+myEwmh :: XConfig a -> XConfig a
+myEwmh c =
+  c { startupHook     = startupHook c +++ ewmhDesktopsStartup
+    , handleEventHook = handleEventHook c +++ ewmhDesktopsEventHookCustom customFilter
+    , logHook         = logHook c +++ ewmhDesktopsLogHookCustom customFilter
+    }
+ where
+   x +++ y = mappend y x
+   customFilter = filter $ (/= "NSP") . W.tag
+
 main :: IO ()
 main = do
     ps <- readDynamicProjects staticProjects
@@ -101,7 +113,8 @@ main = do
      $ withNavigation2DConfig ( def { defaultTiledNavigation = hybridOf sideNavigation centerNavigation } )
      $ docks
      $ modal regularMode
-     $ (ewmh def
+     $ myEwmh
+     $ (def
         { terminal        = myTerm
         , borderWidth     = 2
         , focusedBorderColor = "#cccccc"
@@ -110,7 +123,7 @@ main = do
         , clientMask = clientMask def .|. pointerMotionMask
         , modMask         = mod4Mask
         , layoutHook      = myLayout
-        , workspaces      = myWorkspaces
+        , workspaces      = myWorkspaces ++ (map projectName ps L.\\ myWorkspaces)
         , manageHook      = myManageHook
         , handleEventHook = handleEventHook def
         , logHook         = updateMode <> colorMarked <> runAllPending <> windowHistoryHook
@@ -198,9 +211,23 @@ updateMode = do
         "minimal" -> "#f40"
         _ -> "#cacaca"
   let prettyMode = "%{F"++modeColor ++ " R}\57532" ++ layouticon ++ " " ++ mode ++ "\57534%{RF-}"
+  dir <- io . canonicalizePath =<< expandHome "/home/zubin" . projectDirectory <$> currentProject
+  let reldir = makeRelative "/home/zubin" dir
+      parents = joinPath $ map (take 2) $ splitPath $ takeDirectory reldir
+      shortDir = dropTrailingPathSeparator
+               $ normalise
+               $ "~" </> replaceDirectory reldir parents
+  let prettyDir = shortDir ++ " "
+  io $ appendFile "/tmp/.xmonad-mode-log" prettyDir
   if willMerge
-  then io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ " merge\n")
-  else io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ "\n")
+  then io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ " merge")
+  else io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ "")
+  io $ appendFile "/tmp/.xmonad-mode-log" "\n"
+
+expandHome :: FilePath -> FilePath -> FilePath
+expandHome home dir = case L.stripPrefix "~" dir of
+  Nothing -> dir
+  Just xs -> home ++ xs
 
 colorMarked = getMarked >>= mapM_ makeBorderRed
 
@@ -424,7 +451,7 @@ xmonadControlKeys =
     ,("z", mirrorLayout >> updateMode )
     ,("C-S-d", removeWorkspace >> saveProjectState)
     ,(";", switchProjectPrompt myXPConfig >> saveProjectState)
-    ,("d", changeProjectDirPrompt myXPConfig >> saveProjectState)
+    ,("d", changeProjectDirPrompt myXPConfig >> saveProjectState >> updateMode)
     ,("w", shiftToProjectPrompt myXPConfig)
     ,("e", dwmpromote )
     ,("f", sendMessage $ ToggleLayout)
@@ -518,8 +545,8 @@ killCopy = do
   where delete'' w = W.modify Nothing (W.filter (/= w))
 
 readDynamicProjects :: [Project] -> IO [Project]
-readDynamicProjects staticPs = do
-  hndl <- openFile "/home/zubin/.xprojects" ReadWriteMode
+readDynamicProjects staticPs =
+  withFile "/home/zubin/.xprojects" ReadMode $ \hndl -> do
   ls <- lines <$> hGetContents hndl
   let
     staticMap = M.fromList [(projectName p, p) | p <- staticPs]
@@ -531,7 +558,7 @@ readDynamicProjects staticPs = do
         Just p -> Project name dir (projectStartHook p)
     finalMap = foldr (\p -> M.insert (projectName p) p) staticMap ps
 
-  return $ M.elems finalMap
+  return $! M.elems finalMap
 
 saveProjectState :: X ()
 saveProjectState = do

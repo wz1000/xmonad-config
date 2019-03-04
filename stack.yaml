@@ -2,7 +2,9 @@ resolver: nightly-2019-01-12
 
 packages:
 - .
-extra-deps: []
+
+extra-deps:
+- ./xmonad-contrib
 
 flags: {}
 
