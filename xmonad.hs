@@ -1,5 +1,8 @@
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 import XMonad
 import qualified XMonad.StackSet as W
+import qualified XMonad.Core as C
 import XMonad.Actions.CycleWS ( WSType(..), Direction1D(..), moveTo, toggleWS')
 import XMonad.Actions.CopyWindow
 import XMonad.Actions.GridSelect
@@ -30,6 +33,7 @@ import XMonad.Hooks.Place
 import XMonad.Hooks.ToggleHook
 import XMonad.Layout.BorderResize ( borderResize )
 import XMonad.Layout.ToggleLayouts
+import XMonad.Layout.LayoutModifier
 import XMonad.Layout.MultiToggle
 import qualified XMonad.Layout.MultiToggle as MT
 import XMonad.Layout.MultiToggle.Instances
@@ -64,6 +68,8 @@ import System.IO
 import System.Posix.Types (ProcessID)
 import System.FilePath
 import System.Directory
+
+import Control.DeepSeq
 
 startupApps = ["dunst"
               ,"pkill compton; exec compton"
@@ -118,15 +124,15 @@ main = do
         { terminal        = myTerm
         , borderWidth     = 2
         , focusedBorderColor = "#cccccc"
-        , normalBorderColor = "#2b2b2b"
+        , normalBorderColor = "#3c3c3c"
         , rootMask = rootMask def .|. pointerMotionMask
         , clientMask = clientMask def .|. pointerMotionMask
         , modMask         = mod4Mask
-        , layoutHook      = myLayout
+        , layoutHook      = focusTracking $ historyLayout myLayout
         , workspaces      = myWorkspaces ++ (map projectName ps L.\\ myWorkspaces)
         , manageHook      = myManageHook
         , handleEventHook = handleEventHook def
-        , logHook         = updateMode <> colorMarked <> runAllPending <> windowHistoryHook
+        , logHook         = updateMode <> colorMarked <> runAllPending
         , startupHook     = do
             setWMName "LG3D"
             mapM_ spawn startupApps
@@ -171,29 +177,52 @@ instance ExtensionClass FocusHistory where
   initialValue = FH []
   extensionType = PersistentExtension
 
-windowHistoryHook = do
+data FocusLayout a = FL deriving (Read,Show,Typeable)
+
+historyLayout :: l Window -> ModifiedLayout FocusLayout l Window
+historyLayout = ModifiedLayout FL
+
+instance LayoutModifier FocusLayout Window where
+  modifyLayout fh ws rct = do
+    wold <- getFocused
+    hist <- getFocusHistory <$> ES.get
+    wnew <- windowHistoryHook wold
+    case wnew of
+      Nothing -> runLayout ws rct
+      Just w -> do
+        let oldstack = W.stack ws
+        let mw = L.find (`elem` W.integrate' oldstack) hist
+        let newstack = if (w `elem` (W.integrate' oldstack))
+                       then until ((w==) . W.focus) W.focusUp' <$> oldstack
+                       else case mw of
+                         Just w -> until ((w==) . W.focus) W.focusUp' <$> oldstack
+                         Nothing -> oldstack
+        modifyWindowSet (W.focusWindow w)
+        addAction $ do
+          maybe (return ()) makeBorderNormal wold
+          windows id
+        runLayout ws{W.stack = newstack} rct
+
+windowHistoryHook Nothing = return Nothing
+windowHistoryHook (Just w) = do
   hist <- getFocusHistory <$> ES.get
   curws <- gets $ W.index . windowset
   withWindowSet $ \allws ->
     case hist of
-      [] -> case W.peek allws of
-        Nothing -> return ()
-        Just w -> ES.put $ FH [w]
-      (prev:xs) -> case W.peek allws of
-        Nothing -> return ()
-        Just w
-          | prev == w -> return ()
+      [] -> do
+        ES.put $ FH [w]
+        return Nothing
+      (prev:xs)
+          | prev == w -> return Nothing
           -- Previous focus was removed from ws, focus on previous existing window in current ws
           | not (prev `elem` curws) -> do
               let hist' = filter (`W.member` allws) xs
-              ES.put (FH hist')
-              case L.find (\x -> x `elem` curws ) hist' of
-                Nothing -> do
-                  return ()
-                Just this -> do
-                  (focus this >> setFocusX this)
+              ES.put (FH $ force $ hist')
+              return $ L.find (\x -> x `elem` curws ) hist'
           -- Add current focus to history
-          | otherwise -> ES.put $ FH $ (w:L.delete w hist)
+          | otherwise -> do
+              ES.put $ FH $ force $ (w:L.delete w hist)
+              return Nothing
 
 raiseFloating w = do
   isFloat <- gets $ M.member w . W.floating . windowset
@@ -521,7 +550,7 @@ myTabTheme = def { activeColor = "#cccccc"
                  , activeBorderColor = "#cccccc"
                  , activeTextColor = "#2b2b2b"
                  , inactiveColor = "#2b2b2b"
-                 , inactiveBorderColor = "#1b1b1b"
+                 , inactiveBorderColor = "#3c3c3c"
                  , fontName = "xft:Source Code Pro-10"
                  }
 myXPConfig = def { position = CenteredAt 0.5 0.5
