@@ -2,10 +2,8 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 import XMonad
 import qualified XMonad.StackSet as W
-import qualified XMonad.Core as C
-import XMonad.Actions.CycleWS ( WSType(..), Direction1D(..), moveTo, toggleWS')
+import XMonad.Actions.CycleWS ( toggleWS')
 import XMonad.Actions.CopyWindow
-import XMonad.Actions.GridSelect
 import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , centerNavigation
                                    , sideNavigation
@@ -15,14 +13,12 @@ import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , windowSwap
                                    , Direction2D(..)
                                    , switchLayer)
-import XMonad.Actions.Volume (lowerVolume, raiseVolume, toggleMute)
 import XMonad.Actions.SpawnOn
-import XMonad.Actions.Submap
 import XMonad.Actions.DwmPromote
 import XMonad.Actions.DynamicProjects
 import XMonad.Actions.DynamicWorkspaces
---import XMonad.Actions.UpdateFocus
-import XMonad.Layout.Fullscreen ( fullscreenEventHook )
+-- import XMonad.Actions.UpdateFocus
+-- import XMonad.Layout.Fullscreen ( fullscreenEventHook )
 import XMonad.Layout.Simplest
 import XMonad.Hooks.EwmhDesktops
 import XMonad.Hooks.SetWMName   ( setWMName )
@@ -59,11 +55,9 @@ import Modal hiding (defaultMode, normalMode, insertMode)
 import qualified Modal as M
 
 import Control.Monad
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import Data.Maybe
-import Data.Typeable
-import Data.Monoid
 import System.IO
 import System.Posix.Types (ProcessID)
 import System.FilePath
@@ -271,8 +265,7 @@ myWorkspaces =
             ,"media"
             ]
 
-myLayout = mkToggle1 NOBORDERS
-         $ smartBorders
+myLayout = smartBorders
          $ borderResize
          $ toggleLayouts (StateFull)
          $ avoidStruts
@@ -446,6 +439,9 @@ appLaunchBindings =
     ,("M-S-g", spawn $ runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
     ,("M-S-s", saveWindows)
+    ,("<Print>", spawn "maim -u ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
+    ,("S-<Print>", spawn "maim -us ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
+    ,("M-<Print>", spawn "maim -ui $(xdotool getactivewindow) ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ]
 
 makeBorderRed :: Window -> X ()
@@ -455,7 +451,7 @@ makeBorderRed w =
 
 makeBorderNormal w =
     withDisplay $ \d -> io $ do
-      setWindowBorder d w 0x2b2b2b
+      setWindowBorder d w 0x3c3c3c
 
 makeBorderFocused w =
     withDisplay $ \d -> io $ do
@@ -476,7 +472,7 @@ xmonadControlKeys =
     ,("x", killCopy)
     ,("C-d", sendMessage $ SPACING $ negate 5)
     ,("C-i", sendMessage $ SPACING 5)
-    ,("b", sendMessage (MT.Toggle NOBORDERS) >> sendMessage ToggleStruts)
+    ,("b", sendMessage ToggleStruts)
     ,("z", mirrorLayout >> updateMode )
     ,("C-S-d", removeWorkspace >> saveProjectState)
     ,(";", switchProjectPrompt myXPConfig >> saveProjectState)
@@ -536,9 +532,11 @@ mediaBindings =
     [("<XF86AudioNext>", spawn "mpc next")
     ,("<XF86AudioPrev>", spawn "mpc prev")
     ,("<XF86AudioPlay>", spawn "mpc toggle")
-    ,("<XF86AudioMute>", spawn "pactl set-sink-mute 0 toggle")
+    ,("<XF86AudioStop>", spawn "mpc stop")
+    ,("<XF86AudioMute>", spawn "~/scripts/dvol2 -t")
     ,("<XF86AudioLowerVolume>", spawn "~/scripts/dvol2 -d 2")
     ,("<XF86AudioRaiseVolume>", spawn "~/scripts/dvol2 -i 2")
+    ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("M-<Right>", spawn "light -A 5")
     ,("<XF86MonBrightnessDown>", spawn "light -U 5")
