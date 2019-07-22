@@ -31,6 +31,7 @@ import XMonad.Layout.BorderResize ( borderResize )
 import XMonad.Layout.ToggleLayouts
 import XMonad.Layout.LayoutModifier
 import XMonad.Layout.MultiToggle
+import XMonad.Layout.LayoutHints
 import qualified XMonad.Layout.MultiToggle as MT
 import XMonad.Layout.MultiToggle.Instances
 import XMonad.Layout.Tabbed
@@ -46,6 +47,7 @@ import XMonad.Util.EZConfig
 import XMonad.Util.Run ( safeSpawn )
 import XMonad.Util.Scratchpad
 import XMonad.Util.NamedScratchpad
+import XMonad.Util.NamedWindows
 import XMonad.Util.Invisible
 import qualified XMonad.Util.ExtensibleState as ES
 import XMonad.Util.Paste
@@ -119,13 +121,13 @@ main = do
         , borderWidth     = 2
         , focusedBorderColor = "#cccccc"
         , normalBorderColor = "#3c3c3c"
-        , rootMask = rootMask def .|. pointerMotionMask
-        , clientMask = clientMask def .|. pointerMotionMask
+        , rootMask = rootMask def -- .|. pointerMotionMask
+        , clientMask = clientMask def -- .|. pointerMotionMask
         , modMask         = mod4Mask
         , layoutHook      = focusTracking $ historyLayout myLayout
         , workspaces      = myWorkspaces ++ (map projectName ps L.\\ myWorkspaces)
         , manageHook      = myManageHook
-        , handleEventHook = handleEventHook def
+        , handleEventHook = handleEventHook def <+> hintsEventHook
         , logHook         = updateMode <> colorMarked <> runAllPending
         , startupHook     = do
             setWMName "LG3D"
@@ -269,6 +271,7 @@ myLayout = smartBorders
          $ borderResize
          $ toggleLayouts (StateFull)
          $ avoidStruts
+         $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
               layouts = addTabs shrinkText myTabTheme
@@ -481,6 +484,7 @@ xmonadControlKeys =
     ,("e", dwmpromote )
     ,("f", sendMessage $ ToggleLayout)
     ,("/", windowPrompt highlightConfig Goto allWindows)
+    ,("C-/", tabPrompt)
     ,("S-/", windowPrompt highlightConfig Bring allWindows)
     ,("\\", windowMultiPrompt highlightConfig [(BringCopy,allWindows),(Bring,allWindows)])
     ,("<Space>", switchLayer)
@@ -503,6 +507,21 @@ xmonadControlKeys =
     ,("C-k", resizeIn U)
     ,("C-j", resizeIn D)
     ]
+
+tabPrompt :: X ()
+tabPrompt = do
+  mw <- getFocused
+  case mw of
+    Nothing -> return ()
+    Just w -> sendMessage $ WithGroup go w
+  where
+    go st = do
+      let xs = W.integrate st
+          winmap = fmap M.fromList $ forM xs $ \x -> do
+            name <- show <$> getName x
+            return (name,x)
+      windowPrompt highlightConfig Goto winmap
+      return st
 
 windowBindings = addSuperPrefix windowKeys
 
@@ -536,7 +555,6 @@ mediaBindings =
     ,("<XF86AudioMute>", spawn "~/scripts/dvol2 -t")
     ,("<XF86AudioLowerVolume>", spawn "~/scripts/dvol2 -d 2")
     ,("<XF86AudioRaiseVolume>", spawn "~/scripts/dvol2 -i 2")
-    ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("M-<Right>", spawn "light -A 5")
     ,("<XF86MonBrightnessDown>", spawn "light -U 5")
