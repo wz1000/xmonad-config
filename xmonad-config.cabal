@@ -23,7 +23,6 @@ executable xmonad
                        , containers
                        , xmonad
                        , xmonad-contrib >= 0.14
-                       , xmonad-extras
                        , X11
                        , filepath
                        , directory
