@@ -69,7 +69,7 @@ import Control.DeepSeq
 
 startupApps = ["dunst"
               ,"pkill compton; exec compton"
-              ,"feh --randomize --bg-fill ~/.wallpapers/O7sXAEZ.png"
+              ,"feh --randomize --bg-fill ~/.wallpapers"
               ,"pkill polybar; exec polybar example"
               ]
 
@@ -385,7 +385,7 @@ restartXMonad = do
   broadcastMessage ReleaseResources
   io . flush =<< asks display
   writeStateToFile
-  spawn (myTerm++" --class xmonadrestart -e /home/zubin/.xmonad/restart.sh")
+  spawn (myTerm++" --class xmonadrestart -e /home/zubin/.xmonad/restart-cabal.sh")
 
 myKeyBindings = concat
     [ xmonadControlBindings
