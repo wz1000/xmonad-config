@@ -19,7 +19,7 @@ executable xmonad
   ghc-options:         -O2 -Wunused-imports
   default-language:    Haskell2010
   other-modules:       Spacing, Grab, Modal, XMonad.Layout.ResizableTileSub
-  build-depends:         base >= 4.7 && < 5
+  build-depends:         base >= 4.7
                        , containers
                        , xmonad
                        , xmonad-contrib >= 0.14

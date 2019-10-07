@@ -77,7 +77,7 @@ runInTerm t x = myTerm ++ " --title " ++ t ++ " -e sh -c '" ++ x ++ "'"
 mpvRunner x = myTerm ++ " --title mpvslave --class mpvslave -e sh -c '" ++ x ++ "'"
 
 sshCommand = runInTerm "weechat"
-  "TERM=xterm-256color mosh -p 53 --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
+  "TERM=xterm-256color mosh --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
 
 staticProjects :: [Project]
 staticProjects =
