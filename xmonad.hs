@@ -283,6 +283,8 @@ myLayout = smartBorders
 scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
   , NS "ncmpcpp" (myTerm++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
+  , NS "htop" (myTerm++" --class htop -e htop") (resource =? "htop") defaultFloating
+  , NS "bandwhich" (myTerm++" --class bandwhich -e bandwhich") (resource =? "bandwhich") defaultFloating
   , NS "wicd" "wicd-client --no-tray" (resource =? "wicd-client.py") defaultFloating
   , NS "clerk" (myTerm++" --class clerk -e clerk") (className =? "clerk") defaultFloating
   ]
@@ -329,10 +331,9 @@ manageApps = composeAll
     [ isFullscreen                     --> doFullFloat
     , resource =? "dmenu"              --> doFloat
     , resource =? "mpvytdl"            --> markMpvMerge
-    , resource =? "pavucontrol"        --> placeHook ( fixed (1,45/1080) ) <+> doFloat
+    , resource =? "pavucontrol"        --> placeHook ( fixed (1,25/1080) ) <+> doFloat
     , resource =? "wicd-client.py"     --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "gsimplecal"         --> placeHook ( fixed (1,35/1080) )
-    , resource =? "htop"               --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "alsamixer"          --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "nethogs"            --> placeHook ( fixed (1,35/1080) ) <+> doFloat
     , resource =? "progress"           --> placeHook ( fixed (1,35/1080) ) <+> doFloat
@@ -341,6 +342,8 @@ manageApps = composeAll
     , resource =? "dzen2"              --> doIgnore
     , resource =? "polybar"            --> doIgnore
     , resource =? "scratchpad"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
+    , resource =? "htop"               --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.65)
+    , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (15/1080) 0.58 0.55)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
     , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (15/1080) (2/3) 0.6)
@@ -369,7 +372,7 @@ myManageHook = composeAll
              , manageApps
              , scratchpadManageHookDefault
              , namedScratchpadManageHook scratchpads
-             , placeHook (inBounds (underMouse (0.5, 0.5)))
+             , placeHook (smart (1/2,1/2))
              , toggleHook "merge" mergeIntoFocused
              ]
 
@@ -392,7 +395,7 @@ myKeyBindings = concat
     , appLaunchBindings
     , windowBindings
     , mediaBindings
-    ]
+    ] ++ [("M-M1-<F"++n++">", spawn ("chvt " ++ n)) | i <- [1..7], let n = show i]
 
 setMode m = do
   setTo m
@@ -432,6 +435,8 @@ appLaunchBindings =
     ,("M-S-f", spawnHere $ runInTerm "ranger" "ranger")
     ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",myTerm,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
+    ,("M-<F8>", namedScratchpadAction scratchpads "bandwhich")
+    ,("M-<F9>", namedScratchpadAction scratchpads "htop")
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-<F12>", namedScratchpadAction scratchpads "wicd")
@@ -485,8 +490,8 @@ xmonadControlKeys =
     ,("f", sendMessage $ ToggleLayout)
     ,("/", windowPrompt highlightConfig Goto allWindows)
     ,("C-/", tabPrompt)
-    ,("S-/", windowPrompt highlightConfig Bring allWindows)
-    ,("\\", windowMultiPrompt highlightConfig [(BringCopy,allWindows),(Bring,allWindows)])
+    ,("S-/", windowMultiPrompt highlightConfig [(bringAsTabbed,allWindows),(Bring,allWindows)])
+    ,("\\" , windowMultiPrompt highlightConfig [(bringCopyAsTabbed, allWindows),(BringCopy,allWindows)])
     ,("<Space>", switchLayer)
     ,("S-<Space>", sendMessage NextLayout)
     ,("C-S-<Space>", sendMessage FirstLayout)
@@ -508,6 +513,18 @@ xmonadControlKeys =
     ,("C-j", resizeIn D)
     ]
 
+bringCopyAsTabbed = WithWindow "Bring copy to tab group: " $ \w -> do
+  cur <- getFocused
+  windows $ \ws -> copyWindow w (W.currentTag ws) ws
+  maybe (pure ()) (sendMessage . Migrate w) cur
+  windows W.swapDown
+
+bringAsTabbed = WithWindow "Bring to tab group: " $ \w -> do
+  cur <- getFocused
+  windows $ \ws -> W.shiftWin (W.currentTag ws) w ws
+  maybe (pure ()) (sendMessage . Migrate w) cur
+  windows W.swapDown
+
 tabPrompt :: X ()
 tabPrompt = do
   mw <- getFocused
@@ -521,6 +538,7 @@ tabPrompt = do
             name <- show <$> getName x
             return (name,x)
       windowPrompt highlightConfig Goto winmap
+
       return st
 
 windowBindings = addSuperPrefix windowKeys
@@ -556,10 +574,11 @@ mediaBindings =
     ,("<XF86AudioLowerVolume>", spawn "~/scripts/dvol2 -d 2")
     ,("<XF86AudioRaiseVolume>", spawn "~/scripts/dvol2 -i 2")
     ,("<XF86MonBrightnessUp>", spawn "light -A 5")
-    ,("M-<Right>", spawn "light -A 5")
     ,("<XF86MonBrightnessDown>", spawn "light -U 5")
-    ,("M-<Left>", spawn "light -U 5")
-    ,("M-m", spawn "clerk -t")
+    ,("M-C-m", spawn "clerk -t")
+    ,("M-m n", spawn "mpc next")
+    ,("M-m p", spawn "mpc prev")
+    ,("M-m <Space>", spawn "mpc toggle")
     ]
 
 myTabTheme = def { activeColor = "#cccccc"
