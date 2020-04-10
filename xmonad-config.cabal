@@ -27,3 +27,4 @@ executable xmonad
                        , filepath
                        , directory
                        , deepseq
+                       , extra

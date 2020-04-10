@@ -44,7 +44,7 @@ import XMonad.Prompt.Window
 import XMonad.Prompt.FuzzyMatch
 import XMonad.Prompt
 import XMonad.Util.EZConfig
-import XMonad.Util.Run ( safeSpawn )
+import XMonad.Util.Run ( safeSpawn, runProcessWithInput )
 import XMonad.Util.Scratchpad
 import XMonad.Util.NamedScratchpad
 import XMonad.Util.NamedWindows
@@ -57,6 +57,7 @@ import Modal hiding (defaultMode, normalMode, insertMode)
 import qualified Modal as M
 
 import Control.Monad
+import Control.Monad.Extra ( mapMaybeM )
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import Data.Maybe
@@ -348,7 +349,8 @@ manageApps = composeAll
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
     , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (15/1080) (2/3) 0.6)
     , resource =? "clerk"              --> placeHook ( fixed (0.5,55/1080) ) <+> doFloat
-    , resource =? "zathura"            --> mergeIntoFocused
+    , resource =? "org.pwmt.zathura"   --> mergeIntoFocused <* liftX (addAction $ saveWindows False)
+    , className =? "mpv"               --> pure mempty      <* liftX (addAction $ saveWindows False)
     , manageDocks
     ]
     where
@@ -446,7 +448,8 @@ appLaunchBindings =
     ,("M-S-=", spawn $ "~/scripts/html.sh")
     ,("M-S-g", spawn $ runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
-    ,("M-S-s", saveWindows)
+    ,("M-S-s", saveWindows True)
+    ,("M-S-r", restoreWindows)
     ,("<Print>", spawn "maim -u ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ,("S-<Print>", spawn "maim -us ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ,("M-<Print>", spawn "maim -ui $(xdotool getactivewindow) ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
@@ -476,7 +479,7 @@ xmonadControlKeys =
     ,("S-x", kill1)
     ,("C-<Return>", dwmpromote )
     ,("S-m", toggleHookNext "merge" >> updateMode )
-    ,("S-r", refresh)
+    ,("C-r", refresh)
     ,("x", killCopy)
     ,("C-d", sendMessage $ SPACING $ negate 5)
     ,("C-i", sendMessage $ SPACING 5)
@@ -549,22 +552,6 @@ windowKeys = do
      ,("S-"++[key], windowSwap dir False)
      ]
 
-saveQuery :: Query (Maybe ProcessID)
-saveQuery = do
-  willSave <- resource =? "zathura" <||> className =? "mpv"
-  if willSave
-  then pid
-  else return Nothing
-
-saveWindows = do
-  curws <- gets $ W.index . windowset
-  forM_ curws $ \w -> do
-    mpid <- runQuery saveQuery w
-    case mpid of
-      Nothing -> return ()
-      Just pid -> spawn $ "~/scripts/getcommand.sh " ++ show pid
-
-
 mediaBindings =
     [("<XF86AudioNext>", spawn "mpc next")
     ,("<XF86AudioPrev>", spawn "mpc prev")
@@ -598,6 +585,36 @@ myXPConfig = def { position = CenteredAt 0.5 0.5
 highlightConfig = myXPConfig{alwaysHighlight = True}
 
 addSuperPrefix = map (\(b,a) -> ("M-"++b,a))
+
+saveQuery :: Query (Maybe ProcessID)
+saveQuery = do
+  willSave <- resource =? "org.pwmt.zathura" <||> className =? "mpv"
+  if willSave
+  then pid
+  else return Nothing
+
+saveWindows notify = do
+  curws <- gets $ W.index . windowset
+  cmds <- flip mapMaybeM curws $ \w -> do
+    mpid <- runQuery saveQuery w
+    case mpid of
+      Nothing -> return Nothing
+      Just pid -> do
+        cmd <- runProcessWithInput "/home/zubin/scripts/getcommand.sh" [show pid] ""
+        return $ Just cmd
+  Project name _ _ <- currentProject
+  io $ writeFile ("/home/zubin/.cache/xmonad-resume/"++name) $ show cmds
+  when notify $ spawn $ "notify-send Saved!"
+
+restoreWindows = do
+  Project name _ _ <- currentProject
+  cmds <- liftIO $
+    withFile ("/home/zubin/.cache/xmonad-resume/"++name)
+             ReadMode $ \hndl -> do
+      cmds <- read <$> hGetContents hndl
+      return $!! (cmds :: [String])
+  mapM_ spawn cmds
+  spawn $ "notify-send Restored!"
 
 killCopy :: X ()
 killCopy = do
