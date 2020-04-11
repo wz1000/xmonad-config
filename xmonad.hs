@@ -11,7 +11,6 @@ import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , Navigation2DConfig(..)
                                    , windowGo
                                    , windowSwap
-                                   , Direction2D(..)
                                    , switchLayer)
 import XMonad.Actions.SpawnOn
 import XMonad.Actions.DwmPromote
@@ -69,7 +68,7 @@ import System.Directory
 import Control.DeepSeq
 
 startupApps = ["dunst"
-              ,"pkill compton; exec compton"
+              ,"pkill picom; exec picom"
               ,"feh --randomize --bg-fill ~/.wallpapers"
               ,"pkill polybar; exec polybar example"
               ]
@@ -285,6 +284,8 @@ scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
   , NS "ncmpcpp" (myTerm++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
   , NS "htop" (myTerm++" --class htop -e htop") (resource =? "htop") defaultFloating
+  , NS "ytop" (myTerm++" --class ytop -e ytop -p") (resource =? "ytop") defaultFloating
+  , NS "battop" (myTerm++" --class battop -e battop") (resource =? "battop") defaultFloating
   , NS "bandwhich" (myTerm++" --class bandwhich -e bandwhich") (resource =? "bandwhich") defaultFloating
   , NS "wicd" "wicd-client --no-tray" (resource =? "wicd-client.py") defaultFloating
   , NS "clerk" (myTerm++" --class clerk -e clerk") (className =? "clerk") defaultFloating
@@ -344,6 +345,8 @@ manageApps = composeAll
     , resource =? "polybar"            --> doIgnore
     , resource =? "scratchpad"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "htop"               --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.65)
+    , resource =? "ytop"               --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.8)
+    , resource =? "battop"             --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.6)
     , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (15/1080) 0.58 0.55)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
@@ -437,8 +440,10 @@ appLaunchBindings =
     ,("M-S-f", spawnHere $ runInTerm "ranger" "ranger")
     ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",myTerm,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
+    ,("M-<F7>", namedScratchpadAction scratchpads "htop")
     ,("M-<F8>", namedScratchpadAction scratchpads "bandwhich")
-    ,("M-<F9>", namedScratchpadAction scratchpads "htop")
+    ,("M-<F9>", namedScratchpadAction scratchpads "ytop")
+    ,("M-<F10>", namedScratchpadAction scratchpads "battop")
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-<F12>", namedScratchpadAction scratchpads "wicd")
