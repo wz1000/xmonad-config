@@ -17,7 +17,7 @@ import XMonad.Actions.DwmPromote
 import XMonad.Actions.DynamicProjects
 import XMonad.Actions.DynamicWorkspaces
 -- import XMonad.Actions.UpdateFocus
--- import XMonad.Layout.Fullscreen ( fullscreenEventHook )
+import XMonad.Layout.Fullscreen ( fullscreenFloat, FullscreenMessage(..) )
 import XMonad.Layout.Simplest
 import XMonad.Hooks.EwmhDesktops
 import XMonad.Hooks.SetWMName   ( setWMName )
@@ -56,10 +56,12 @@ import Modal hiding (defaultMode, normalMode, insertMode)
 import qualified Modal as M
 
 import Control.Monad
-import Control.Monad.Extra ( mapMaybeM )
+import Control.Monad.Extra ( mapMaybeM, whenM )
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
+import qualified Data.List.Extra as L
 import Data.Maybe
+import Data.Monoid
 import System.IO
 import System.Posix.Types (ProcessID)
 import System.FilePath
@@ -208,11 +210,11 @@ windowHistoryHook (Just w) = do
       [] -> do
         ES.put $ FH [w]
         return Nothing
-      (prev:xs)
+      (prev:_)
           | prev == w -> return Nothing
           -- Previous focus was removed from ws, focus on previous existing window in current ws
           | not (prev `elem` curws) -> do
-              let hist' = filter (`W.member` allws) xs
+              let hist' = filter (`W.member` allws) hist
               ES.put (FH $ force $ hist')
               return $ L.find (\x -> x `elem` curws ) hist'
           -- Add current focus to history
@@ -267,29 +269,79 @@ myWorkspaces =
             ,"media"
             ]
 
+instance Shrinker CustomShrink where
+  shrinkIt s cs
+    | "Kakoune" `L.isSuffixOf` cs = shrinkKak cs
+    | otherwise = shrinkIt shrinkText cs
+
+shrinkKak cs = cs : cs' : cs'' : shortDir : L.tails shortDir
+  where
+    words = L.splitOn " - " cs
+    cs'  = L.intercalate " - " $ L.dropEnd 1 words
+    cs'' = L.intercalate " - " $ L.dropEnd 2 words
+    fs = L.splitOn "/" cs''
+    shortDir = case fs of
+      [] -> []
+      xs -> L.intercalate "/" $ map (take 2) (init fs) ++ [last fs]
+
 myLayout = smartBorders
          $ borderResize
+         $ fullscreenFloat
          $ toggleLayouts (StateFull)
          $ avoidStruts
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
-              layouts = addTabs shrinkText myTabTheme
+              layouts = addTabs CustomShrink myTabTheme
                 $ subLayout [] Simplest $ mkToggle1 MIRROR myTall
               myTall = spacing 0 $ resizable 40 5
               resizable step n = ResizableTall 1 (1/step) ((1/2)+n/step) [] (I [])
               -- ^ n is no of step-lengths right of center, which is used as the
               -- default split ratio
+kittyPopup = "kitty -o background_opacity=0.95"
 scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
-  , NS "ncmpcpp" (myTerm++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
-  , NS "htop" (myTerm++" --class htop -e htop") (resource =? "htop") defaultFloating
-  , NS "ytop" (myTerm++" --class ytop -e ytop -p") (resource =? "ytop") defaultFloating
-  , NS "battop" (myTerm++" --class battop -e battop") (resource =? "battop") defaultFloating
-  , NS "bandwhich" (myTerm++" --class bandwhich -e bandwhich") (resource =? "bandwhich") defaultFloating
+  , NS "ncmpcpp" (kittyPopup++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
+  , NS "htop" (kittyPopup++" --class htop -e htop") (resource =? "htop") defaultFloating
+  , NS "ytop" (kittyPopup++" --class ytop -e ytop -p") (resource =? "ytop") defaultFloating
+  , NS "battop" (kittyPopup++" --class battop -e battop") (resource =? "battop") defaultFloating
+  , NS "bandwhich" (kittyPopup++" --class bandwhich -e bandwhich") (resource =? "bandwhich") defaultFloating
   , NS "wicd" "wicd-client --no-tray" (resource =? "wicd-client.py") defaultFloating
-  , NS "clerk" (myTerm++" --class clerk -e clerk") (className =? "clerk") defaultFloating
+  , NS "clerk" (kittyPopup++" --class clerk -e clerk") (className =? "clerk") defaultFloating
+  , NS "calcurse" (kittyPopup++" --class calcurse -e calcurse -q") (className =? "calcurse") defaultFloating
+  , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
   ]
+
+newtype DynamicScratchpad
+  = DS { getDynamicScratchpad :: Maybe Window }
+  deriving (Eq,Read,Show)
+instance ExtensionClass DynamicScratchpad where
+  initialValue = DS Nothing
+  extensionType = PersistentExtension
+
+dynamicScratchpadQuery = do
+  w <- ask
+  liftX $ ES.gets ((Just w ==) . getDynamicScratchpad)
+
+makeDynamicScratchpad :: X ()
+makeDynamicScratchpad = do
+  ES.put . DS =<< logTitle =<< getFocused
+  where
+    logTitle Nothing = do
+      spawn "notify-send 'Removing dynamic scratchpad!'"
+      pure Nothing
+    logTitle (Just w) = do
+      n <- show <$> getName w
+      spawn $ "notify-send 'Adding dynamic scratchpad!' '" ++ n ++ "'"
+      pure (Just w)
+
+dynamicScratchpadAction :: X ()
+dynamicScratchpadAction = do
+  namedScratchpadAction scratchpads "dynamic"
+  mw <- getFocused
+  forM_ mw $ \w ->
+    whenM (runQuery dynamicScratchpadQuery w) $
+      windows W.swapDown
 
 combineMPV :: X ()
 combineMPV = withWindowSet $ \s -> do
@@ -306,14 +358,18 @@ markMpvMerge = do
   liftX $ addAction combineMPV
   return mempty
 
-mergeIntoFocused = do
+mergeIntoFocused = mergeIntoFocusedIf (pure True)
+
+mergeIntoFocusedIf q = do
   w <- ask
   liftX $ addAction $ do
     xs <- ES.gets getFocusHistory
-    case L.find (/= w) xs of
+    curws <- gets $ W.index . windowset
+    case L.find (liftM2 (&&) (/= w) (`elem` curws)) xs of
       Nothing -> return ()
-      Just x -> do
-        sendMessage $ Migrate w x
+      Just x ->
+        whenM (runQuery q x) $
+          sendMessage $ Migrate w x
   return mempty
 
 newtype PendingActions = PendingActions { getPending :: [X()] }
@@ -347,12 +403,15 @@ manageApps = composeAll
     , resource =? "htop"               --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.65)
     , resource =? "ytop"               --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.8)
     , resource =? "battop"             --> doRectFloat (centerAligned 0.75 (15/1080) 0.5 0.6)
-    , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (15/1080) 0.58 0.55)
+    , resource =? "calcurse"           --> doRectFloat (centerAligned 0.80 (15/1080) 0.40 0.5)
+    , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (15/1080) 0.58 0.6)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
+    , resource =? "kittypopup"         --> doRectFloat (centerAligned 0.5 0.2 0.55 0.65)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
     , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (15/1080) (2/3) 0.6)
     , resource =? "clerk"              --> placeHook ( fixed (0.5,55/1080) ) <+> doFloat
-    , resource =? "org.pwmt.zathura"   --> mergeIntoFocused <* liftX (addAction $ saveWindows False)
+    , resource =? "org.pwmt.zathura"   --> mergeIntoFocusedIf (not <$> className =? "firefox")
+                                        <* liftX (addAction $ saveWindows False)
     , className =? "mpv"               --> pure mempty      <* liftX (addAction $ saveWindows False)
     , manageDocks
     ]
@@ -393,7 +452,7 @@ restartXMonad = do
   broadcastMessage ReleaseResources
   io . flush =<< asks display
   writeStateToFile
-  spawn (myTerm++" --class xmonadrestart -e /home/zubin/.xmonad/restart-cabal.sh")
+  spawn (kittyPopup++" --class xmonadrestart -e /home/zubin/.xmonad/restart-cabal.sh")
 
 myKeyBindings = concat
     [ xmonadControlBindings
@@ -435,11 +494,12 @@ appLaunchBindings =
     [("M-S-t", hookNext "merge" True >> spawnHere myTerm)
     ,("M-<Return>", spawnHere myTerm)
     ,("M-S-b", spawnHere "firefox")
-    ,("M-S-e", hookNext "merge" True >> spawnHere "kitty -e zsh -ic 'e'")
-    ,("M-u", spawn "kitty --class unicodeinp -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
+    ,("M-S-e", hookNext "merge" True >> spawnHere "kitty -e zsh -c 'source ~/.zsh_funcs && e'")
+    ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
     ,("M-S-f", spawnHere $ runInTerm "ranger" "ranger")
-    ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",myTerm,"--class scratchpad -e ~/scripts/detachable"])
+    ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
+    ,("M-<F6>", namedScratchpadAction scratchpads "calcurse")
     ,("M-<F7>", namedScratchpadAction scratchpads "htop")
     ,("M-<F8>", namedScratchpadAction scratchpads "bandwhich")
     ,("M-<F9>", namedScratchpadAction scratchpads "ytop")
@@ -447,6 +507,8 @@ appLaunchBindings =
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-<F12>", namedScratchpadAction scratchpads "wicd")
+    ,("M-i", dynamicScratchpadAction)
+    ,("M-S-i", makeDynamicScratchpad)
     ,("M-q", restartXMonad)
     ,("M-r", shellPrompt myXPConfig)
     ,("M-v", spawn $ mpvRunner "~/scripts/playvid.sh")
@@ -473,6 +535,23 @@ makeBorderFocused w =
     withDisplay $ \d -> io $ do
       setWindowBorder d w 0xcccccc
 
+floatFull = do
+  mw <- getFocused
+  case mw of
+    Nothing -> pure ()
+    Just w -> do
+      floating <- gets $ W.floating . windowset
+      let mr = M.lookup w floating
+      case mr of
+        Nothing -> sendMessage ToggleLayout
+        Just r
+          | r == W.RationalRect 0 0 1 1 -> do
+              broadcastMessage $ RemoveFullscreen w
+              sendMessage FullscreenChanged
+          | otherwise -> do
+              broadcastMessage $ AddFullscreen w
+              sendMessage FullscreenChanged
+
 xmonadControlBindings = addSuperPrefix xmonadControlKeys
 
 xmonadControlKeys =
@@ -495,7 +574,7 @@ xmonadControlKeys =
     ,("d", changeProjectDirPrompt myXPConfig >> saveProjectState >> updateMode)
     ,("w", shiftToProjectPrompt myXPConfig)
     ,("e", dwmpromote )
-    ,("f", sendMessage $ ToggleLayout)
+    ,("f", floatFull)
     ,("/", windowPrompt highlightConfig Goto allWindows)
     ,("C-/", tabPrompt)
     ,("S-/", windowMultiPrompt highlightConfig [(bringAsTabbed,allWindows),(Bring,allWindows)])

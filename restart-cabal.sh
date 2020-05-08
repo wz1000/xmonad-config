@@ -5,7 +5,7 @@ cabal new-build
 if [ $? != "0" ]; then
     read
 else
-  x=$(find ./dist-newstyle/ -type f -executable -name xmonad -print -quit)
+  x=$(cabal new-exec --verbose=0 --offline sh -- -c 'which xmonad')
   if [ ! -f "$x" ]; then
     echo "Couldn't find executable xmonad in dist-newstyle"
     read
