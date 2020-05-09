@@ -1,7 +1,9 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 import XMonad
+import XMonad -- hiding ((|||))
 import qualified XMonad.StackSet as W
+import XMonad.Actions.CycleRecentWS
 import XMonad.Actions.CycleWS ( toggleWS')
 import XMonad.Actions.CopyWindow
 import XMonad.Actions.Navigation2D ( withNavigation2DConfig
@@ -19,6 +21,8 @@ import XMonad.Actions.DynamicWorkspaces
 -- import XMonad.Actions.UpdateFocus
 import XMonad.Layout.Fullscreen ( fullscreenFloat, FullscreenMessage(..) )
 import XMonad.Layout.Simplest
+import XMonad.Layout.Maximize
+-- import XMonad.Layout.LayoutCombinators
 import XMonad.Hooks.EwmhDesktops
 import XMonad.Hooks.SetWMName   ( setWMName )
 import XMonad.Hooks.ManageDocks
@@ -289,6 +293,7 @@ myLayout = smartBorders
          $ fullscreenFloat
          $ toggleLayouts (StateFull)
          $ avoidStruts
+         $ maximizeWithPadding 20
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
@@ -552,15 +557,21 @@ floatFull = do
               broadcastMessage $ AddFullscreen w
               sendMessage FullscreenChanged
 
+cylceOptions w = map (W.view `flip` w) (recentTags w)
+  where
+    recentTags w = filter (/= "NSP") $ map W.tag $ tail (W.workspaces w) ++ [head (W.workspaces w)]
+
 xmonadControlBindings = addSuperPrefix xmonadControlKeys
 
 xmonadControlKeys =
     [("n", windows W.focusDown)
     ,("p", windows W.focusUp)
+    ,("y", withFocused (sendMessage . maximizeRestore))
     ,("S-n", windows W.swapDown)
     ,("S-p", windows W.swapUp)
     ,("`", toggleWS' ["NSP"])
     ,("S-x", kill1)
+    ,("<Tab>",cycleWindowSets cylceOptions [xK_Super_L] xK_Tab xK_grave)
     ,("C-<Return>", dwmpromote )
     ,("S-m", toggleHookNext "merge" >> updateMode )
     ,("C-r", refresh)
