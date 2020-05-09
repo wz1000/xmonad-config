@@ -210,11 +210,11 @@ windowHistoryHook (Just w) = do
       [] -> do
         ES.put $ FH [w]
         return Nothing
-      (prev:_)
+      (prev:xs)
           | prev == w -> return Nothing
           -- Previous focus was removed from ws, focus on previous existing window in current ws
           | not (prev `elem` curws) -> do
-              let hist' = filter (`W.member` allws) hist
+              let hist' = filter (`W.member` allws) xs
               ES.put (FH $ force $ hist')
               return $ L.find (\x -> x `elem` curws ) hist'
           -- Add current focus to history
