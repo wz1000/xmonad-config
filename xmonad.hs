@@ -226,6 +226,11 @@ windowHistoryHook (Just w) = do
               ES.put $ FH $ force $ (w:L.delete w hist)
               return Nothing
 
+addFH Nothing = pure ()
+addFH (Just w) = do
+  hist <- getFocusHistory <$> ES.get
+  ES.put (FH $ w : L.delete w hist)
+
 raiseFloating w = do
   isFloat <- gets $ M.member w . W.floating . windowset
   if isFloat
@@ -241,18 +246,26 @@ updateMode = do
         "nav" -> "#fa0"
         "minimal" -> "#f40"
         _ -> "#cacaca"
-  let prettyMode = "%{F"++modeColor ++ " R}\57532" ++ layouticon ++ " " ++ mode ++ "\57534%{RF-}"
+  let prettyMode
+        | m || mode /= "normal" = "%{F"++modeColor ++ " R}\57532" ++ layouticon ++ " " ++ mode ++ "\57534%{RF-}"
+        | otherwise = ""
   dir <- io . canonicalizePath =<< expandHome "/home/zubin" . projectDirectory <$> currentProject
   let reldir = makeRelative "/home/zubin" dir
       parents = joinPath $ map (take 2) $ splitPath $ takeDirectory reldir
-      shortDir = dropTrailingPathSeparator
+      shortDir = addTrailingPathSeparator
                $ normalise
                $ "~" </> replaceDirectory reldir parents
+
+  lbranch <- L.trim <$> runProcessWithInput "git" ["-C",dir, "rev-parse","--abbrev-ref","HEAD"] ""
+  let branch
+        | length lbranch >= 12 = take 5 lbranch ++ "…" ++ L.takeEnd 6 lbranch
+        | otherwise = lbranch
   let prettyDir = shortDir ++ " "
   io $ appendFile "/tmp/.xmonad-mode-log" prettyDir
   if willMerge
   then io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ " merge")
-  else io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ "")
+  else io $ appendFile "/tmp/.xmonad-mode-log" prettyMode
+  io $ appendFile "/tmp/.xmonad-mode-log" (if branch /= "master" then "%{F#faa}"++branch++"%{F}" else "")
   io $ appendFile "/tmp/.xmonad-mode-log" "\n"
 
 expandHome :: FilePath -> FilePath -> FilePath
@@ -278,7 +291,7 @@ instance Shrinker CustomShrink where
     | "Kakoune" `L.isSuffixOf` cs = shrinkKak cs
     | otherwise = shrinkIt shrinkText cs
 
-shrinkKak cs = cs : cs' : cs'' : shortDir : L.tails shortDir
+shrinkKak cs = cs : cs' : cs'' : moarShort shortDirs
   where
     words = L.splitOn " - " cs
     cs'  = L.intercalate " - " $ L.dropEnd 1 words
@@ -286,7 +299,11 @@ shrinkKak cs = cs : cs' : cs'' : shortDir : L.tails shortDir
     fs = L.splitOn "/" cs''
     shortDir = case fs of
       [] -> []
-      xs -> L.intercalate "/" $ map (take 2) (init fs) ++ [last fs]
+      xs -> map (take 2) (init fs) ++ [last fs]
+    shortDirs = map (L.intercalate "/") $ init $ L.tails shortDir
+    moarShort [] = []
+    moarShort [x] = shrinkIt shrinkText x
+    moarShort (x:xs) = x : moarShort xs
 
 myLayout = smartBorders
          $ borderResize
@@ -494,12 +511,13 @@ navMode c = Mode "nav" GrabBound $ additions
         ,("i", setMode (regularMode c))
         ]
       ]
+mergeNext = getFocused >>= addFH >> hookNext "merge" True
 
 appLaunchBindings =
-    [("M-S-t", hookNext "merge" True >> spawnHere myTerm)
+    [("M-S-t", mergeNext >> spawnHere myTerm)
     ,("M-<Return>", spawnHere myTerm)
     ,("M-S-b", spawnHere "firefox")
-    ,("M-S-e", hookNext "merge" True >> spawnHere "kitty -e zsh -c 'source ~/.zsh_funcs && e'")
+    ,("M-S-e", mergeNext >> spawnHere "kitty -e zsh -c 'source ~/.zsh_funcs && e'")
     ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
     ,("M-S-f", spawnHere $ runInTerm "ranger" "ranger")
     ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"])
