@@ -45,7 +45,7 @@ import XMonad.Layout.SubLayouts
 import XMonad.Layout.StateFull
 import XMonad.Layout.ResizableTileSub
 import XMonad.Layout.NoBorders  ( smartBorders )
-import XMonad.Prompt.Shell  ( shellPrompt )
+import XMonad.Prompt.Zsh  ( zshPrompt )
 import XMonad.Prompt.Window
 import XMonad.Prompt.FuzzyMatch
 import XMonad.Prompt
@@ -550,7 +550,7 @@ appLaunchBindings =
     ,("M-i", dynamicScratchpadAction)
     ,("M-S-i", makeDynamicScratchpad)
     ,("M-q", restartXMonad)
-    ,("M-r", shellPrompt myXPConfig)
+    ,("M-r", zshPrompt myXPConfig "/home/zubin/scripts/capture.zsh")
     ,("M-v", namedScratchpadAction scratchpads "mpvytdl")
     ,("M-S-v", spawn "~/scripts/playvid.sh")
     ,("M-S-=", spawn "~/scripts/html.sh")
@@ -716,7 +716,9 @@ myXPConfig = def { position = CenteredAt 0.4 0.5
                  , font = "xft:Source Code Pro-10"
                  , height = 22
                  , maxComplRows = Just 24
-                 , searchPredicate = fuzzyMatch }
+                 , searchPredicate = fuzzyMatch
+                 , sorter = fuzzySort
+                 }
 highlightConfig = myXPConfig{alwaysHighlight = True}
 
 addSuperPrefix = map (\(b,a) -> ("M-"++b,a))
