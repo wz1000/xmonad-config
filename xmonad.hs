@@ -121,7 +121,7 @@ main = do
 
 myConfig ps
   = dynamicProjects ps
-  $ withNavigation2DConfig ( def { defaultTiledNavigation = hybridOf sideNavigation centerNavigation } )
+  $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
   $ docks
   $ modal regularMode
   $ myEwmh
@@ -341,7 +341,7 @@ scratchpads =
   , NS "clerk" (kittyPopup++" --class clerk -e clerk") (className =? "clerk") defaultFloating
   , NS "calcurse" (kittyPopup++" --class calcurse -e calcurse -q") (className =? "calcurse") defaultFloating
   , NS "neomutt" (kittyPopup++" --class neomutt -e neomutt") (className =? "neomutt") defaultFloating
-  , NS "mpvytdl" "~/scripts/playvid.sh" (resource =? "mpvytdl") defaultFloating
+  , NS "mpvytdl" "notify-send 'No video scratchpad!'" (resource =? "mpvytdl") defaultFloating
   , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
   ]
 
@@ -398,14 +398,12 @@ mergeIntoFocused = mergeIntoFocusedIf (pure True)
 
 mergeIntoFocusedIf q = do
   w <- ask
-  liftX $ addAction $ do
-    xs <- ES.gets getFocusHistory
-    curws <- gets $ W.index . windowset
-    case L.find (liftM2 (&&) (/= w) (`elem` curws)) xs of
-      Nothing -> return ()
-      Just x ->
-        whenM (runQuery q x) $
-          sendMessage $ Migrate w x
+  f <- liftX getFocused
+  case f of
+    Nothing -> return ()
+    Just x -> liftX $ addAction $
+      whenM (runQuery q x) $
+        sendMessage $ Migrate w x
   return mempty
 
 newtype PendingActions = PendingActions { getPending :: [X()] }
@@ -423,6 +421,7 @@ runAllPending = do
 
 manageApps = composeAll
     [ isFullscreen                     --> doFullFloat
+    , stringProperty "WM_WINDOW_ROLE" =? "PictureInPicture"  --> placeHook (smart (0,1)) <> doFloat
     , resource =? "dmenu"              --> doFloat
     , resource =? "mpvytdl"            --> doRectFloat (W.RationalRect 0.5 (15/1080) 0.5 0.5)
     , resource =? "pavucontrol"        --> placeHook ( fixed (1,25/1080) ) <> doFloat
@@ -432,7 +431,6 @@ manageApps = composeAll
     , resource =? "nethogs"            --> placeHook ( fixed (1,35/1080) ) <> doFloat
     , resource =? "progress"           --> placeHook ( fixed (1,35/1080) ) <> doFloat
     , resource =? "runner"             --> placeHook ( fixed (0,1) ) <> doFloat
-    , resource =? "feh"                --> doIgnore
     , resource =? "dzen2"              --> doIgnore
     , resource =? "Dunst"              --> doIgnore
     , resource =? "scratchpad"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
@@ -449,7 +447,10 @@ manageApps = composeAll
     , resource =? "clerk"              --> placeHook ( fixed (0.5,55/1080) ) <> doFloat
     , resource =? "org.pwmt.zathura"   --> mergeIntoFocusedIf (not <$> className =? "firefox")
                                         <* liftX (addAction $ saveWindows False)
-    , className =? "mpv"               --> pure mempty      <* liftX (addAction $ saveWindows False)
+    , resource =? "vimiv"              --> mergeIntoFocusedIf (not <$> className =? "firefox")
+                                        <* liftX (addAction $ saveWindows False)
+    , className =? "mpv"               --> mergeIntoFocusedIf (not <$> className =? "firefox")
+                                        <* liftX (addAction $ saveWindows False)
     , manageDocks
     ]
     where
@@ -634,7 +635,7 @@ xmonadControlKeys =
     ,("a", mergeMarked)
     ,("s", swapWithMarked)
     ,("o", shiftMarked)
-    ,("c", spawn "rofi -show calc -width 880 -lines 20")
+    ,("c", spawn "LANG=en_IN.UTF-8 rofi -show calc -width 880 -lines 20 -no-show-match -no-sort -calc-command \"echo -n '{result}' | xsel -b\" ")
     ,("S-a", unmergeFocused)
     ,("[", onGroup W.focusUp')
     ,("]", onGroup W.focusDown')
@@ -696,6 +697,7 @@ mediaBindings =
     ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("<XF86MonBrightnessDown>", spawn "light -U 5")
     ,("M-C-m", spawn "clerk -t")
+    ,("M-m m", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-m n", spawn "mpc next")
     ,("M-m p", spawn "mpc prev")
     ,("M-m s", spawn "~/scripts/mpd-notify 8000")
@@ -751,7 +753,7 @@ restoreWindows = do
       cmds <- read <$> hGetContents hndl
       return $!! (cmds :: [String])
   mapM_ spawn cmds
-  spawn $ "notify-send Restored!"
+  safeSpawn "/home/zubin/scripts/notesc" ["Restored!",show cmds]
 
 killCopy :: X ()
 killCopy = do

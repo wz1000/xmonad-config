@@ -5,19 +5,13 @@ set -o pipefail
 cd ~/.xmonad
 cabal new-build
 x=$(cabal new-exec --verbose=0 --offline sh -- -c 'which xmonad')
-if [ ! -f "$x" ]; then
-  echo "Couldn't find executable xmonad in dist-newstyle"
-  exit
-fi
+[ ! -x "$x" ] && echo "Couldn't find executable xmonad in dist-newstyle" && exit 1
 rm xmonad-x86_64-linux
 cp "$x" xmonad-x86_64-linux
 rm ~/.local/bin/xmonad
 cp "$x" ~/.local/bin/xmonad
 xc=$(cabal new-exec --verbose=0 --offline sh -- -c 'which xmonadctl')
-if [ ! -f "$x" ]; then
-  echo "Couldn't find executable xmonadctl in dist-newstyle"
-  exit
-fi
+[ ! -x "$xc" ] && echo "Couldn't find executable xmonadctl in dist-newstyle" && exit 1
 rm ~/.local/bin/xmonadctl
 cp "$xc" ~/.local/bin/xmonadctl
 xmonad --restart
