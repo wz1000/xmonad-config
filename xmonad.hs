@@ -4,13 +4,10 @@
 import XMonad
 import qualified XMonad.StackSet as W
 import XMonad.Actions.CycleRecentWS
-import XMonad.Actions.WindowBringer
 import XMonad.Actions.CycleWS ( toggleWS')
 import XMonad.Actions.CopyWindow
 import XMonad.Actions.Navigation2D ( withNavigation2DConfig
                                    , centerNavigation
-                                   , sideNavigation
-                                   , hybridOf
                                    , Navigation2DConfig(..)
                                    , windowGo
                                    , windowSwap
@@ -26,13 +23,11 @@ import XMonad.Layout.Maximize
 -- import XMonad.Layout.LayoutCombinators
 import XMonad.Hooks.EwmhDesktops
 import XMonad.Hooks.ServerMode
-import XMonad.Hooks.SetWMName   ( setWMName )
 import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ManageHelpers
 import XMonad.Hooks.InsertPosition
 import XMonad.Hooks.Place
 import XMonad.Hooks.ToggleHook
-import XMonad.Layout.BorderResize ( borderResize )
 import XMonad.Layout.ToggleLayouts
 import XMonad.Layout.LayoutModifier
 import XMonad.Layout.MultiToggle
@@ -67,7 +62,6 @@ import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import qualified Data.List.Extra as L
 import Data.Maybe
-import Data.Monoid
 import System.IO
 import System.Posix.Types (ProcessID)
 import System.FilePath
@@ -79,7 +73,7 @@ import Control.DeepSeq
 startupApps = ["exec dunst"
               ,"exec picom"
               ,"feh --randomize --bg-fill ~/.wallpapers"
-              ,"pkill polybar; exec polybar example"
+              ,"~/scripts/restart-polybar"
               ]
 
 runInTerm t x = myTerm ++ " --title " ++ t ++ " -e sh -c '" ++ x ++ "'"
