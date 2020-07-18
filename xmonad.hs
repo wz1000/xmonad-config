@@ -2,7 +2,6 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 import XMonad
-import XMonad -- hiding ((|||))
 import qualified XMonad.StackSet as W
 import XMonad.Actions.CycleRecentWS
 import XMonad.Actions.WindowBringer
@@ -527,7 +526,8 @@ navMode c = Mode "nav" GrabBound $ additions
         ,("i", setMode (regularMode c))
         ]
       ]
-mergeNext = getFocused >>= addFH >> hookNext "merge" True
+
+mergeNext = hookNext "merge" True
 
 appLaunchBindings =
     [("M-S-t", mergeNext >> spawnHere myTerm)
