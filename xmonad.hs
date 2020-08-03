@@ -1,5 +1,10 @@
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 import XMonad
 import qualified XMonad.StackSet as W
@@ -22,6 +27,7 @@ import XMonad.Layout.Simplest
 import XMonad.Layout.Maximize
 -- import XMonad.Layout.LayoutCombinators
 import XMonad.Hooks.EwmhDesktops
+import XMonad.Hooks.UrgencyHook
 import XMonad.Hooks.ServerMode
 import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ManageHelpers
@@ -114,6 +120,7 @@ main = do
 
 myConfig ps
   = dynamicProjects ps
+  $ withUrgencyHookC myUrgencyHook urgencyConfig{ suppressWhen = Focused }
   $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
   $ docks
   $ modal regularMode
@@ -138,6 +145,11 @@ myConfig ps
 
 myMouseBindings = []
 
+myUrgencyHook :: Window -> X ()
+myUrgencyHook w = do
+  name <- getName w
+  safeSpawn "notify-send" ["Urgent!",show name]
+
 setProjectDir = do
   d <- expandHome "/home/zubin" . projectDirectory <$> currentProject
   io $ setCurrentDirectory d
@@ -153,7 +165,8 @@ isCurMirrored = do
   w <- gets (W.currentTag . windowset)
   ES.gets (M.findWithDefault False w . getMirrored)
 
-newtype Mirrored = Mirrored { getMirrored :: M.Map WorkspaceId Bool } deriving (Read, Show, Typeable)
+newtype Mirrored = Mirrored { getMirrored :: M.Map WorkspaceId Bool }
+  deriving stock (Read, Show, Typeable)
 instance ExtensionClass Mirrored where
   initialValue = Mirrored mempty
   extensionType = PersistentExtension
@@ -178,7 +191,8 @@ resizeIn d = do
     (U, True) -> sendMessage Shrink
     (D, True) -> sendMessage Expand
 
-newtype FocusHistory = FH { getFocusHistory :: [Window] } deriving (Read, Show, Typeable)
+newtype FocusHistory = FH { getFocusHistory :: [Window] }
+  deriving stock (Read, Show, Typeable)
 instance ExtensionClass FocusHistory where
   initialValue = FH []
   extensionType = PersistentExtension
@@ -312,7 +326,7 @@ myLayout = smartBorders
          $ fullscreenFloat
          $ toggleLayouts (StateFull)
          $ avoidStruts
-         $ maximizeWithPadding 20
+         $ maximizeWithPadding 0
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
@@ -340,7 +354,7 @@ scratchpads =
 
 newtype DynamicScratchpad
   = DS { getDynamicScratchpad :: Maybe Window }
-  deriving (Eq,Read,Show)
+  deriving stock (Eq,Read,Show)
 instance ExtensionClass DynamicScratchpad where
   initialValue = DS Nothing
   extensionType = PersistentExtension
@@ -399,7 +413,7 @@ mergeIntoFocusedIf q = do
         sendMessage $ Migrate w x
   return mempty
 
-newtype PendingActions = PendingActions { getPending :: [X()] }
+newtype PendingActions = PendingActions { getPending :: [X ()] }
 instance ExtensionClass PendingActions where
   initialValue = PendingActions []
 
@@ -436,6 +450,7 @@ manageApps = composeAll
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "kittypopup"         --> doRectFloat (centerAligned 0.5 0.2 0.55 0.65)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
+    , resource =? "xmessage"           --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
     , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (14/1080) (2/3) 0.6)
     , resource =? "clerk"              --> placeHook ( fixed (0.5,55/1080) ) <> doFloat
     , resource =? "org.pwmt.zathura"   --> mergeIntoFocusedIf (not <$> className =? "firefox")
@@ -541,6 +556,7 @@ appLaunchBindings =
     ,("<XF86Mail>", namedScratchpadAction scratchpads "neomutt")
     ,("<Scroll_lock>", namedScratchpadAction scratchpads "neomutt")
     ,("M-C-n", namedScratchpadAction scratchpads "neomutt")
+    ,("M-S-c", namedScratchpadAction scratchpads "calcurse")
     ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
     ,("M-i", dynamicScratchpadAction)
     ,("M-S-i", makeDynamicScratchpad)
@@ -601,6 +617,7 @@ xmonadControlKeys =
     ,("y", withFocused (sendMessage . maximizeRestore))
     ,("S-n", windows W.swapDown)
     ,("S-p", windows W.swapUp)
+    ,("S-u", focusUrgent >> clearUrgents)
     ,("`", toggleWS' ["NSP"])
     ,("S-x", kill1)
     ,("<Tab>",cycleWindowSets cylceOptions [xK_Super_L] xK_Tab xK_grave)
@@ -690,8 +707,9 @@ mediaBindings =
     ,("<XF86AudioRaiseVolume>", spawn "~/scripts/dvol2 -i 2")
     ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("<XF86MonBrightnessDown>", spawn "light -U 5")
+    ,("M-m m", spawn "clerk -t")
     ,("M-C-m", spawn "clerk -t")
-    ,("M-m m", namedScratchpadAction scratchpads "ncmpcpp")
+    ,("M-C-u", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-m n", spawn "mpc next")
     ,("M-m p", spawn "mpc prev")
     ,("M-m s", spawn "~/scripts/mpd-notify 8000")
