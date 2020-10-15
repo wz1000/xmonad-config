@@ -6,6 +6,9 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 import XMonad
 import qualified XMonad.StackSet as W
 import XMonad.Actions.CycleRecentWS
@@ -67,6 +70,7 @@ import Control.Monad.Extra ( mapMaybeM, whenM )
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import qualified Data.List.Extra as L
+import Data.Coerce
 import Data.Maybe
 import System.IO
 import System.Posix.Types (ProcessID)
@@ -82,7 +86,9 @@ startupApps = ["exec dunst"
               ,"~/scripts/restart-polybar"
               ]
 
-runInTerm t x = myTerm ++ " --title " ++ t ++ " -e sh -c '" ++ x ++ "'"
+runInTerm t x = do
+  term <- getTerm
+  pure $ term ++ " --title " ++ t ++ " -e sh -c '" ++ x ++ "'"
 sshCommand = runInTerm "weechat"
   "TERM=xterm-256color mosh --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
 
@@ -90,14 +96,14 @@ staticProjects :: [Project]
 staticProjects =
   [ Project "main" "~" Nothing
   , Project "web" "~" (Just $ spawnOn "web" "firefox")
-  , Project "irc" "~" (Just $ spawnOn "irc" sshCommand)
+  , Project "irc" "~" (Just $ spawnOn "irc" =<< sshCommand)
   , Project "dev" "~" Nothing
   , Project "conf" "~" Nothing
   , Project "play" "~" Nothing
   , Project "media" "~" Nothing
   ]
 
-myTerm = "kitty -1"
+myTerm = "kitty"
 -- myTerm = "alacritty"
 
 myEwmh :: XConfig a -> XConfig a
@@ -165,11 +171,20 @@ isCurMirrored = do
   w <- gets (W.currentTag . windowset)
   ES.gets (M.findWithDefault False w . getMirrored)
 
+data ExtT = PersistentE | StateE
+newtype Ext (t :: ExtT) a = Ext a
+instance (ExtensionClass a, Default a, Read a, Show a) => ExtensionClass (Ext PersistentE a) where
+  initialValue = Ext def
+  extensionType = PersistentExtension @a . coerce
+
+instance (Default a, ExtensionClass a) => ExtensionClass (Ext StateE a) where
+  initialValue = Ext def
+  extensionType = StateExtension @a . coerce
+
 newtype Mirrored = Mirrored { getMirrored :: M.Map WorkspaceId Bool }
   deriving stock (Read, Show, Typeable)
-instance ExtensionClass Mirrored where
-  initialValue = Mirrored mempty
-  extensionType = PersistentExtension
+  deriving newtype Default
+  deriving ExtensionClass via Ext PersistentE Mirrored
 
 mirrorLayout = do
   w <- gets (W.currentTag . windowset)
@@ -193,9 +208,8 @@ resizeIn d = do
 
 newtype FocusHistory = FH { getFocusHistory :: [Window] }
   deriving stock (Read, Show, Typeable)
-instance ExtensionClass FocusHistory where
-  initialValue = FH []
-  extensionType = PersistentExtension
+  deriving newtype Default
+  deriving ExtensionClass via Ext PersistentE FocusHistory
 
 data FocusLayout a = FL deriving (Read,Show,Typeable)
 
@@ -355,9 +369,8 @@ scratchpads =
 newtype DynamicScratchpad
   = DS { getDynamicScratchpad :: Maybe Window }
   deriving stock (Eq,Read,Show)
-instance ExtensionClass DynamicScratchpad where
-  initialValue = DS Nothing
-  extensionType = PersistentExtension
+  deriving newtype Default
+  deriving ExtensionClass via Ext PersistentE DynamicScratchpad
 
 dynamicScratchpadQuery = do
   w <- ask
@@ -414,8 +427,8 @@ mergeIntoFocusedIf q = do
   return mempty
 
 newtype PendingActions = PendingActions { getPending :: [X ()] }
-instance ExtensionClass PendingActions where
-  initialValue = PendingActions []
+  deriving newtype Default
+  deriving ExtensionClass via Ext StateE PendingActions
 
 addAction :: X () -> X ()
 addAction x = ES.modify (\(PendingActions xs) -> PendingActions (x:xs))
@@ -538,9 +551,15 @@ navMode c = Mode "nav" GrabBound $ additions
 
 mergeNext = hookNext "merge" True
 
+getTerm = do
+  Project name _ _ <- currentProject
+  pure $ myTerm ++ " --single-instance --instance-group="++name
+
+spawnTerm = getTerm >>= spawnHere
+
 appLaunchBindings =
-    [("M-S-t", mergeNext >> spawnHere myTerm)
-    ,("M-<Return>", spawnHere myTerm)
+    [("M-S-t", mergeNext >> spawnTerm)
+    ,("M-<Return>", spawnTerm)
     ,("M-S-b", spawnHere "firefox")
     -- ,("M-S-e", spawnHere "~/scripts/kak-run -e rofi-files")
     -- ,("M-C-b", spawnHere "~/scripts/kak-run -e rofi-buffers")
@@ -549,7 +568,7 @@ appLaunchBindings =
     ,("M-C-e", spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
     ,("M-C-b", spawn "ROFI_SEARCH='ddgr' rofi -modi blocks -blocks-wrap rofi-search -show blocks -lines 10 -eh 4 -kb-custom-1 'Control+y' -color-window 'argb:f32b2b2b, argb:B3000000, argb:E6ffffff'")
     ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
-    ,("M-S-f", spawnHere $ runInTerm "ranger" "ranger")
+    ,("M-S-f", spawnHere =<< runInTerm "ranger" "ranger")
     ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
     ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
@@ -565,7 +584,7 @@ appLaunchBindings =
     ,("M-v", namedScratchpadAction scratchpads "mpvytdl")
     ,("M-S-v", spawn "~/scripts/playvid.sh")
     ,("M-S-=", spawn "~/scripts/html.sh")
-    ,("M-S-g", spawn $ runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
+    ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
     ,("M-S-s", saveWindows True)
     ,("M-S-r", restoreWindows)
@@ -830,8 +849,8 @@ swapUp' (W.Stack t (l:ls) rs) = W.Stack t ls (l:rs)
 swapUp' (W.Stack t []     rs) = W.Stack t (reverse rs) []
 
 newtype MarkedWindow = MW { unMW :: Maybe Window }
-instance ExtensionClass MarkedWindow where
-  initialValue = MW Nothing
+  deriving newtype Default
+  deriving ExtensionClass via Ext StateE MarkedWindow
 
 markFocused :: X ()
 markFocused = do
