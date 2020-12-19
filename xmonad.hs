@@ -126,7 +126,7 @@ main = do
 
 myConfig ps
   = dynamicProjects ps
-  $ withUrgencyHookC myUrgencyHook urgencyConfig{ suppressWhen = Focused }
+  -- $ withUrgencyHookC myUrgencyHook urgencyConfig{ suppressWhen = Focused }
   $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
   $ docks
   $ modal regularMode
@@ -164,6 +164,9 @@ myServer :: [String] -> X ()
 myServer ["scratchpad",x] = namedScratchpadAction scratchpads x
 myServer ["hook",x] = toggleHookNext x
 myServer ["migrate",readMaybe -> Just w, readMaybe -> Just x] = sendMessage $ Migrate w (x :: Window)
+myServer ["cd",dir] = do
+  dir' <- liftIO $ makeAbsolute dir
+  modifyProject (\p -> p { projectDirectory = dir' })
 myServer xs = safeSpawn "notify-send" ["Couldn't recognize cmd", unwords xs]
 
 isCurMirrored :: X Bool
@@ -279,26 +282,27 @@ updateMode = do
         "minimal" -> "#f40"
         _ -> "#cacaca"
   let prettyMode
-        | m || mode /= "normal" = "%{F"++modeColor ++ " R}\57532" ++ layouticon ++ " " ++ mode ++ "\57534%{RF-}"
-        | otherwise = ""
+        | m || mode /= "normal" = Just $ "%{F"++modeColor ++ "}%{R}\57532" ++ layouticon ++ " " ++ mode ++ "\57534%{R}%{F-}"
+        | otherwise = Nothing
   dir <- io . canonicalizePath =<< expandHome "/home/zubin" . projectDirectory <$> currentProject
   let reldir = makeRelative "/home/zubin" dir
       parents = joinPath $ map (take 2) $ splitPath $ takeDirectory reldir
-      shortDir = addTrailingPathSeparator
-               $ normalise
-               $ "~" </> replaceDirectory reldir parents
+      prettyDir = Just
+                $ addTrailingPathSeparator
+                $ normalise
+                $ "~" </> replaceDirectory reldir parents
 
   lbranch <- L.trim <$> runProcessWithInput "git" ["-C",dir, "rev-parse","--abbrev-ref","HEAD"] ""
   let branch
         | length lbranch >= 12 = take 5 lbranch ++ "…" ++ L.takeEnd 6 lbranch
         | otherwise = lbranch
-  let prettyDir = shortDir ++ " "
-  io $ appendFile "/tmp/.xmonad-mode-log" prettyDir
-  if willMerge
-  then io $ appendFile "/tmp/.xmonad-mode-log" (prettyMode ++ " merge")
-  else io $ appendFile "/tmp/.xmonad-mode-log" prettyMode
-  io $ appendFile "/tmp/.xmonad-mode-log" (if branch /= "master" then "%{F#faa}"++branch++"%{F}" else "")
-  io $ appendFile "/tmp/.xmonad-mode-log" "\n"
+      branchText
+        | branch /= "master" = Just $ "%{F#faa}"++branch++"%{F}"
+        | otherwise = Nothing
+      mergeText
+        | willMerge = Just "merge"
+        | otherwise = Nothing
+  io $ appendFile "/tmp/.xmonad-mode-log" $ (++ "\n") $ unwords $ catMaybes [prettyDir, prettyMode, mergeText, branchText]
 
 expandHome :: FilePath -> FilePath -> FilePath
 expandHome home dir = case L.stripPrefix "~" dir of
@@ -351,7 +355,7 @@ myLayout = smartBorders
               -- ^ n is no of step-lengths right of center, which is used as the
               -- default split ratio
 
-kittyPopup = "kitty -o background_opacity=0.95"
+kittyPopup = "kitty -1 -o background_opacity=0.95"
 scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
   , NS "ncmpcpp" (kittyPopup++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
@@ -552,7 +556,8 @@ navMode c = Mode "nav" GrabBound $ additions
 mergeNext = hookNext "merge" True
 
 getTerm = do
-  Project name _ _ <- currentProject
+  -- Project name _ _ <- currentProject
+  let name = "regular"
   pure $ myTerm ++ " --single-instance --instance-group="++name
 
 spawnTerm = getTerm >>= spawnHere
@@ -580,6 +585,7 @@ appLaunchBindings =
     ,("M-i", dynamicScratchpadAction)
     ,("M-S-i", makeDynamicScratchpad)
     ,("M-q", restartXMonad)
+    ,("C-q", pure ()) -- Disable it in firefox
     ,("M-r", zshPrompt myXPConfig "/home/zubin/scripts/capture.zsh")
     ,("M-v", namedScratchpadAction scratchpads "mpvytdl")
     ,("M-S-v", spawn "~/scripts/playvid.sh")
