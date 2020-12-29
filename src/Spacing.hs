@@ -22,8 +22,8 @@ import XMonad.StackSet (integrate', stack, Stack(..) )
 
 
 
-data Spacing a = Spacing Int deriving (Show, Read)
-data SPACING = SPACING Int  deriving (Read, Show, Eq, Typeable)
+newtype Spacing a = Spacing Int deriving (Show, Read)
+newtype SPACING = SPACING Int  deriving (Read, Show, Eq, Typeable)
 
 spacing :: Int -> l a -> ModifiedLayout Spacing l a
 spacing p = ModifiedLayout (Spacing p)

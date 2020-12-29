@@ -1,9 +1,10 @@
 import Graphics.X11.Xlib
 import Graphics.X11.Xlib.Extras
 import System.Environment
+import GHC.ResponseFile
 
 main :: IO ()
-main = sendCommand  "XMONAD_COMMAND" . unwords =<< getArgs
+main = sendCommand  "XMONAD_COMMAND" . escapeArgs =<< getArgs
 
 sendCommand :: String -> String -> IO ()
 sendCommand addr s = do

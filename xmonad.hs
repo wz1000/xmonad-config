@@ -51,6 +51,7 @@ import XMonad.Layout.NoBorders  ( smartBorders )
 import XMonad.Prompt.Zsh  ( zshPrompt )
 import XMonad.Prompt.Window
 import XMonad.Prompt.FuzzyMatch
+import XMonad.Prompt.Shell
 import XMonad.Prompt
 import XMonad.Util.EZConfig
 import XMonad.Util.Run ( safeSpawn, runProcessWithInput )
@@ -77,6 +78,7 @@ import System.Posix.Types (ProcessID)
 import System.FilePath
 import System.Directory
 import Text.Read
+import GHC.ResponseFile
 
 import Control.DeepSeq
 
@@ -142,7 +144,7 @@ myConfig ps
   , layoutHook         = focusTracking $ historyLayout myLayout
   , workspaces         = myWorkspaces ++ (map projectName ps L.\\ myWorkspaces)
   , manageHook         = myManageHook
-  , handleEventHook    = handleEventHook def <> hintsEventHook <> serverModeEventHookF "XMONAD_COMMAND" (myServer . words)
+  , handleEventHook    = handleEventHook def <> hintsEventHook <> serverModeEventHookF "XMONAD_COMMAND" (myServer . unescapeArgs)
   , logHook            = updateMode <> colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
   , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir
   } `additionalKeysP` myKeyBindings
@@ -167,6 +169,8 @@ myServer ["migrate",readMaybe -> Just w, readMaybe -> Just x] = sendMessage $ Mi
 myServer ["cd",dir] = do
   dir' <- liftIO $ makeAbsolute dir
   modifyProject (\p -> p { projectDirectory = dir' })
+myServer ["focus",readMaybe -> Just w] = do
+  focus w
 myServer xs = safeSpawn "notify-send" ["Couldn't recognize cmd", unwords xs]
 
 isCurMirrored :: X Bool
@@ -254,11 +258,11 @@ windowHistoryHook (Just w) = do
           -- Previous focus was removed from ws, focus on previous existing window in current ws
           | not (prev `elem` curws) -> do
               let hist' = filter (`W.member` allws) xs
-              ES.put (FH $ force $ hist')
+              ES.put $! (FH $! force $ hist')
               return $ L.find (\x -> x `elem` curws ) hist'
           -- Add current focus to history
           | otherwise -> do
-              ES.put $ FH $ force $ (w:L.delete w hist)
+              ES.put $! FH $! force $ (w:L.delete w hist)
               return Nothing
 
 addFH Nothing = pure ()
@@ -586,7 +590,8 @@ appLaunchBindings =
     ,("M-S-i", makeDynamicScratchpad)
     ,("M-q", restartXMonad)
     ,("C-q", pure ()) -- Disable it in firefox
-    ,("M-r", zshPrompt myXPConfig "/home/zubin/scripts/capture.zsh")
+    ,("M-r", shellPrompt myXPConfig)
+    ,("M-S-z", zshPrompt myXPConfig "/home/zubin/scripts/capture.zsh")
     ,("M-v", namedScratchpadAction scratchpads "mpvytdl")
     ,("M-S-v", spawn "~/scripts/playvid.sh")
     ,("M-S-=", spawn "~/scripts/html.sh")
