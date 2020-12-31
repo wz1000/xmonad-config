@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, FlexibleInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveDataTypeable, FlexibleInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses, BangPatterns #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -25,7 +25,8 @@ import qualified XMonad.StackSet as W
 import XMonad.Util.Invisible
 import Control.Monad
 import qualified Data.Map as M
-import Data.List ((\\))
+import Data.List ((\\), foldl')
+import Data.Coerce
 
 -- $usage
 -- You can use this module with the following in your @~\/.xmonad\/xmonad.hs@:
@@ -54,22 +55,22 @@ data MirrorResize = MirrorShrink | MirrorExpand deriving Typeable
 instance Message MirrorResize
 
 data ResizableTall a = ResizableTall
-    { _nmaster :: Int       -- ^ number of master windows
-    , _delta  :: Rational   -- ^ change when resizing by 'Shrink', 'Expand',
+    { _nmaster :: !Int       -- ^ number of master windows
+    , _delta  :: !Rational   -- ^ change when resizing by 'Shrink', 'Expand',
                             -- 'MirrorShrink', 'MirrorExpand'
-    , _frac   :: Rational   -- ^ width of master
-    , _slaves :: [Rational] -- ^ fraction to multiply the window
+    , _frac   :: !Rational   -- ^ width of master
+    , _slaves :: ![Rational] -- ^ fraction to multiply the window
                             -- height that would be given when divided equally.
                             --
                             -- slave windows are assigned their modified
                             -- heights in order, from top to bottom
                             --
                             -- unspecified values are replaced by 1
-    , _mess   :: Invisible [] SomeMessage
+    , _mess   :: !(Invisible [] SomeMessage)
     } deriving (Show, Read)
 
 handleMsg :: Eq a => W.Stack a -> [a] -> SomeMessage -> ResizableTall a ->  ResizableTall a
-handleMsg ms fs m l@(ResizableTall nmaster delta frac mfrac msgs) = maybe l id (unfloat fs ms >>= handleMesg)
+handleMsg ms fs !m l@(ResizableTall nmaster delta frac mfrac _) = maybe (l{_mess = I []}) id (unfloat fs ms >>= handleMesg)
         where handleMesg s = msum [fmap resize (fromMessage m)
                                   ,fmap (\x -> mresize x s) (fromMessage m)
                                   ,fmap incmastern (fromMessage m)]
@@ -77,33 +78,34 @@ handleMsg ms fs m l@(ResizableTall nmaster delta frac mfrac msgs) = maybe l id (
                                then Nothing
                                else Just (s { W.up = (W.up s) \\ fs
                                             , W.down = (W.down s) \\ fs })
-              resize Shrink = ResizableTall nmaster delta (max 0 $ frac-delta) mfrac msgs
-              resize Expand = ResizableTall nmaster delta (min 1 $ frac+delta) mfrac msgs
+              resize Shrink = ResizableTall nmaster delta (max 0 $ frac-delta) mfrac (I [])
+              resize Expand = ResizableTall nmaster delta (min 1 $ frac+delta) mfrac (I [])
               mresize MirrorShrink s = mresize' s delta
               mresize MirrorExpand s = mresize' s (0-delta)
               mresize' s d = let n = length $ W.up s
                                  total = n + (length $ W.down s) + 1
                                  pos = if n == (nmaster-1) || n == (total-1) then n-1 else n
                                  mfrac' = modifymfrac (mfrac ++ repeat 1) d pos
-                             in ResizableTall nmaster delta frac (take total mfrac') msgs
+                             in ResizableTall nmaster delta frac (take total mfrac') (I [])
               modifymfrac [] _ _ = []
               modifymfrac (f:fx) d n | n == 0    = f+d : fx
                                      | otherwise = f : modifymfrac fx d (n-1)
-              incmastern (IncMasterN d) = ResizableTall (max 0 (nmaster+d)) delta frac mfrac msgs
+              incmastern (IncMasterN d) = ResizableTall (max 0 (nmaster+d)) delta frac mfrac (I [])
 
 handleMsgs :: Eq a => ResizableTall a -> W.Stack a -> [a] -> ResizableTall a
-handleMsgs l ms fs = (foldr (handleMsg ms fs) l (unI $ _mess l)){_mess = I []}
+handleMsgs !l !ms !fs = (foldl' (flip $ handleMsg ms fs) l (reverse $ unI $ _mess l)){_mess = I []}
 
 unI :: Invisible m a -> m a
-unI (I x) = x
+unI = coerce
 
 instance LayoutClass ResizableTall Window where
-    doLayout l r ms = do
+    doLayout !l r ms = do
         fs <- (M.keys . W.floating) `fmap` gets windowset
-        let l'@(ResizableTall nmaster _ frac mfrac msgs) = handleMsgs l ms fs
+        let !l'@(ResizableTall nmaster _ frac mfrac _) = handleMsgs l ms fs
         let ws = (ap zip (tile frac (mfrac ++ repeat 1) r nmaster . length) . W.integrate) ms
         return (ws, Just l')
-    pureMessage l m = return $ l{_mess = I (m : unI (_mess l))}
+    pureMessage !l m = return $! l{_mess = I (m : ms)}
+      where !ms = unI $! _mess l
     description _ = "ResizableTall"
 
 tile :: Rational -> [Rational] -> Rectangle -> Int -> Int -> [Rectangle]
