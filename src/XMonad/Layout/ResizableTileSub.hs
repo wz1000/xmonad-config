@@ -27,6 +27,7 @@ import Control.Monad
 import qualified Data.Map as M
 import Data.List ((\\), foldl')
 import Data.Coerce
+import Data.Typeable
 
 -- $usage
 -- You can use this module with the following in your @~\/.xmonad\/xmonad.hs@:
@@ -70,7 +71,9 @@ data ResizableTall a = ResizableTall
     } deriving (Show, Read)
 
 handleMsg :: Eq a => W.Stack a -> [a] -> SomeMessage -> ResizableTall a ->  ResizableTall a
-handleMsg ms fs !m l@(ResizableTall nmaster delta frac mfrac _) = maybe (l{_mess = I []}) id (unfloat fs ms >>= handleMesg)
+handleMsg ms fs !m !(ResizableTall nmaster delta frac mfrac _) = case unfloat fs ms >>= handleMesg of
+          Just !x -> x
+          Nothing -> ResizableTall nmaster delta frac mfrac (I [])
         where handleMesg s = msum [fmap resize (fromMessage m)
                                   ,fmap (\x -> mresize x s) (fromMessage m)
                                   ,fmap incmastern (fromMessage m)]
@@ -101,10 +104,13 @@ unI = coerce
 instance LayoutClass ResizableTall Window where
     doLayout !l r ms = do
         fs <- (M.keys . W.floating) `fmap` gets windowset
-        let !l'@(ResizableTall nmaster _ frac mfrac _) = handleMsgs l ms fs
+        let !l'@(ResizableTall nmaster _ frac mfrac msgs) = handleMsgs l ms fs
         let ws = (ap zip (tile frac (mfrac ++ repeat 1) r nmaster . length) . W.integrate) ms
         return (ws, Just l')
-    pureMessage !l m = return $! l{_mess = I (m : ms)}
+    pureMessage !l mess@(SomeMessage m)
+      | (typeOf m == typeOf Shrink || typeOf m == typeOf MirrorShrink || typeOf m == typeOf IncMasterN)
+        = Just $! l{_mess = I (mess : ms)}
+      | otherwise = Nothing
       where !ms = unI $! _mess l
     description _ = "ResizableTall"
 
