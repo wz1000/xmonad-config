@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DerivingVia #-}
@@ -14,12 +15,7 @@ import qualified XMonad.StackSet as W
 import XMonad.Actions.CycleRecentWS
 import XMonad.Actions.CycleWS ( toggleWS')
 import XMonad.Actions.CopyWindow
-import XMonad.Actions.Navigation2D ( withNavigation2DConfig
-                                   , centerNavigation
-                                   , Navigation2DConfig(..)
-                                   , windowGo
-                                   , windowSwap
-                                   , switchLayer)
+import XMonad.Actions.Navigation2D
 import XMonad.Actions.SpawnOn
 import XMonad.Actions.DwmPromote
 import XMonad.Actions.DynamicProjects
@@ -38,22 +34,25 @@ import XMonad.Hooks.InsertPosition
 import XMonad.Hooks.Place
 import XMonad.Hooks.ToggleHook
 import XMonad.Layout.ToggleLayouts
+import XMonad.Layout.TrackFloating
 import XMonad.Layout.LayoutModifier
 import XMonad.Layout.MultiToggle
 import XMonad.Layout.LayoutHints
 import qualified XMonad.Layout.MultiToggle as MT
 import XMonad.Layout.MultiToggle.Instances
+import XMonad.Layout.Column
 import XMonad.Layout.Tabbed
 import XMonad.Layout.SubLayouts
 import XMonad.Layout.StateFull
 import XMonad.Layout.ResizableTileSub
-import XMonad.Layout.NoBorders  ( smartBorders )
+import XMonad.Layout.NoBorders
 import XMonad.Prompt.Zsh  ( zshPrompt )
 import XMonad.Prompt.Window
 import XMonad.Prompt.FuzzyMatch
 import XMonad.Prompt.Shell
 import XMonad.Prompt
 import XMonad.Util.EZConfig
+import XMonad.Util.Hacks
 import XMonad.Util.Run ( safeSpawn, runProcessWithInput )
 import XMonad.Util.Scratchpad
 import XMonad.Util.NamedScratchpad
@@ -79,8 +78,10 @@ import System.FilePath
 import System.Directory
 import Text.Read
 import GHC.ResponseFile
+import XMonad.Util.XSelection
 
 import Control.DeepSeq
+
 
 startupApps = ["exec dunst"
               ,"exec picom"
@@ -141,10 +142,15 @@ myConfig ps
   , rootMask           = rootMask def -- .|. pointerMotionMask
   , clientMask         = clientMask def -- .|. pointerMotionMask
   , modMask            = mod4Mask
-  , layoutHook         = focusTracking $ historyLayout myLayout
+  , layoutHook         = focusTracking $ historyLayout $ myLayout
   , workspaces         = myWorkspaces ++ (map projectName ps L.\\ myWorkspaces)
   , manageHook         = myManageHook
-  , handleEventHook    = handleEventHook def <> hintsEventHook <> serverModeEventHookF "XMONAD_COMMAND" (myServer . unescapeArgs)
+  , handleEventHook    = mconcat
+                       [ handleEventHook def
+                       , hintsEventHook
+                       , serverModeEventHookF "XMONAD_COMMAND" (myServer . unescapeArgs)
+                       , windowedFullscreenFixEventHook
+                       ]
   , logHook            = updateMode <> colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
   , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir
   } `additionalKeysP` myKeyBindings
@@ -164,13 +170,15 @@ setProjectDir = do
 
 myServer :: [String] -> X ()
 myServer ["scratchpad",x] = namedScratchpadAction scratchpads x
+myServer ["project",x] = lookupProject x >>= \case
+  Nothing -> safeSpawn "notify-send" ["no project", x]
+  Just p -> switchProject p
 myServer ["hook",x] = toggleHookNext x
 myServer ["migrate",readMaybe -> Just w, readMaybe -> Just x] = sendMessage $ Migrate w (x :: Window)
 myServer ["cd",dir] = do
   dir' <- liftIO $ makeAbsolute dir
   modifyProject (\p -> p { projectDirectory = dir' })
-myServer ["focus",readMaybe -> Just w] = do
-  focus w
+myServer ["focus",readMaybe -> Just w] = focus w
 myServer xs = safeSpawn "notify-send" ["Couldn't recognize cmd", unwords xs]
 
 isCurMirrored :: X Bool
@@ -190,8 +198,10 @@ instance (Default a, ExtensionClass a) => ExtensionClass (Ext StateE a) where
 
 newtype Mirrored = Mirrored { getMirrored :: M.Map WorkspaceId Bool }
   deriving stock (Read, Show, Typeable)
-  deriving newtype Default
   deriving ExtensionClass via Ext PersistentE Mirrored
+
+instance Default Mirrored where
+  def = Mirrored mempty
 
 mirrorLayout = do
   w <- gets (W.currentTag . windowset)
@@ -344,16 +354,16 @@ shrinkKak cs = cs : cs' : cs'' : moarShort shortDirs
     moarShort [x] = shrinkIt shrinkText x
     moarShort (x:xs) = x : moarShort xs
 
-myLayout = smartBorders
-         $ fullscreenFloat
-         $ toggleLayouts (StateFull)
+myLayout = fullscreenFloat
+         $ toggleLayouts (noBorders StateFull)
+         $ smartBorders
          $ avoidStruts
          $ maximizeWithPadding 0
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
               layouts = addTabs CustomShrink myTabTheme
-                $ subLayout [] Simplest $ mkToggle1 MIRROR myTall
+                $ trackFloating $ subLayout [] (Simplest ||| (Mirror $ Column 1)) $ mkToggle1 MIRROR myTall
               myTall = spacing 0 $ resizable 40 5
               resizable step n = ResizableTall 1 (1/step) ((1/2)+n/step) [] (I [])
               -- ^ n is no of step-lengths right of center, which is used as the
@@ -445,7 +455,7 @@ runAllPending :: X ()
 runAllPending = do
   PendingActions xs <- ES.get
   ES.put (PendingActions [])
-  sequence_ xs
+  sequence_ $ reverse xs
 
 manageApps = composeAll
     [ isFullscreen                     --> doFullFloat
@@ -575,35 +585,46 @@ appLaunchBindings =
     -- ,("M-S-e", mergeNext >> spawnHere "kitty -1 -e zsh -c 'source ~/.zsh_funcs && e'")
     ,("M-S-e", mergeNext >> spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
     ,("M-C-e", spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
-    ,("M-C-b", spawn "ROFI_SEARCH='ddgr' rofi -modi blocks -blocks-wrap rofi-search -show blocks -lines 10 -eh 4 -kb-custom-1 'Control+y' -color-window 'argb:f32b2b2b, argb:B3000000, argb:E6ffffff'")
+    -- ,("M-C-b", spawn "ROFI_SEARCH='ddgr' rofi -modi blocks -blocks-wrap rofi-search -show blocks -lines 10 -eh 4 -kb-custom-1 'Control+y' -color-window 'argb:f32b2b2b, argb:B3000000, argb:E6ffffff'")
     ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
     ,("M-S-f", spawnHere =<< runInTerm "ranger" "ranger")
     ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
-    ,("<F10>", namedScratchpadAction scratchpads "ncmpcpp")
-    ,("<XF86Mail>", namedScratchpadAction scratchpads "neomutt")
-    ,("<Scroll_lock>", namedScratchpadAction scratchpads "neomutt")
-    ,("M-C-n", namedScratchpadAction scratchpads "neomutt")
-    ,("M-S-c", namedScratchpadAction scratchpads "calcurse")
-    ,("M-<F11>", namedScratchpadAction scratchpads "pavucontrol")
+
     ,("M-i", dynamicScratchpadAction)
     ,("M-S-i", makeDynamicScratchpad)
     ,("M-q", restartXMonad)
     ,("C-q", pure ()) -- Disable it in firefox
     ,("M-r", shellPrompt myXPConfig)
     ,("M-S-z", zshPrompt myXPConfig "/home/zubin/scripts/capture.zsh")
-    ,("M-v", namedScratchpadAction scratchpads "mpvytdl")
     ,("M-S-v", spawn "~/scripts/playvid.sh")
     ,("M-S-=", spawn "~/scripts/html.sh")
-    ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
+    -- ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
     ,("M-S-s", saveWindows True)
     ,("M-S-r", restoreWindows)
-    ,("M-M1-l", spawn "~/scripts/lock")
+    ,("M-M1-<Backspace>", spawn "~/scripts/lock")
     ,("<Print>", spawn "maim -u ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ,("S-<Print>", spawn "maim -us ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ,("M-<Print>", spawn "maim -ui $(xdotool getactivewindow) ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
-    ]
+    ,("M-C-g", openGHC)
+    ] ++ namedScratchpadActions
+    where
+      namedScratchpadActions = [ ("M-C-"++[k], namedScratchpadAction scratchpads act) | (k, act) <- namedScratchpadPads]
+      namedScratchpadPads =
+        [('t',"htop")
+        ,('m',"ncmpcpp")
+        ,('n',"neomutt")
+        ,('c',"calcurse")
+        ,('v',"pavucontrol")
+        ,('f',"mpvytdl")
+        ]
+
+openGHC :: X ()
+openGHC = getSelection >>= \case
+  '#':xs -> spawn $ "firefox 'https://gitlab.haskell.org/ghc/ghc/-/issues/"++xs++"'"
+  '!':xs -> spawn $ "firefox 'https://gitlab.haskell.org/ghc/ghc/-/merge_requests/"++xs++"'"
+  _ -> pure ()
 
 makeBorderRed :: Window -> X ()
 makeBorderRed w =
@@ -635,9 +656,7 @@ floatFull = do
               broadcastMessage $ AddFullscreen w
               sendMessage FullscreenChanged
 
-cylceOptions w = map (W.view `flip` w) (recentTags w)
-  where
-    recentTags w = filter (/= "NSP") $ map W.tag $ tail (W.workspaces w) ++ [head (W.workspaces w)]
+cycleOptions w = filter (/= "NSP") $ map W.tag $ tail (W.workspaces w) ++ [head (W.workspaces w)]
 
 xmonadControlBindings = addSuperPrefix xmonadControlKeys
 
@@ -650,7 +669,7 @@ xmonadControlKeys =
     ,("S-u", focusUrgent >> clearUrgents)
     ,("`", toggleWS' ["NSP"])
     ,("S-x", kill1)
-    ,("<Tab>",cycleWindowSets cylceOptions [xK_Super_L] xK_Tab xK_grave)
+    ,("<Tab>",cycleWindowSets cycleOptions [xK_Super_L] xK_Tab xK_grave)
     ,("C-<Return>", dwmpromote )
     ,("S-m", toggleHookNext "merge" >> updateMode )
     ,("C-r", refresh)
@@ -671,7 +690,7 @@ xmonadControlKeys =
     ,("\\" , windowMultiPrompt highlightConfig [(bringCopyAsTabbed, allWindows),(BringCopy,allWindows)])
     ,("<Space>", switchLayer)
     ,("S-<Space>", sendMessage NextLayout)
-    ,("C-S-<Space>", sendMessage FirstLayout)
+    ,("C-S-<Space>", toSubl NextLayout)
     ,("'", markFocused)
     ,("a", mergeMarked)
     ,("s", swapWithMarked)
@@ -724,6 +743,8 @@ windowKeys = do
   (key,dir) <- zip "hjkl" [L,D,U,R]
   id [([key], windowGo   dir False)
      ,("S-"++[key], windowSwap dir False)
+     ,("M1-"++[key], screenGo dir False)
+     ,("S-M1-"++[key], screenSwap dir False)
      ]
 
 mediaBindings =
@@ -738,8 +759,6 @@ mediaBindings =
     ,("<XF86MonBrightnessUp>", spawn "light -A 5")
     ,("<XF86MonBrightnessDown>", spawn "light -U 5")
     ,("M-m m", spawn "clerk -t")
-    ,("M-C-m", spawn "clerk -t")
-    ,("M-C-u", namedScratchpadAction scratchpads "ncmpcpp")
     ,("M-m n", spawn "mpc next")
     ,("M-m p", spawn "mpc prev")
     ,("M-m s", spawn "~/scripts/mpd-notify 8000")
