@@ -4,10 +4,13 @@ set -e
 set -o pipefail
 cd ~/.xmonad
 cabal new-build
-x=$(PATH="${PATH/$HOME\/.local\/bin:/}" cabal new-exec --verbose=0 --offline sh -- -c 'which xmonad')
+x=$(cabal list-bin xmonad)
 [ ! -x "$x" ] && echo "Couldn't find executable xmonad in dist-newstyle" && exit 1
 cp -uf "$x" "$1"
-xc=$(PATH="${PATH/$HOME\/.local\/bin:/}" cabal new-exec --verbose=0 --offline sh -- -c 'which xmonadctl')
+xc=$(cabal list-bin xmonadctl)
 [ ! -x "$xc" ] && echo "Couldn't find executable xmonadctl in dist-newstyle" && exit 1
 cp -uf "$xc" ~/.local/bin/xmonadctl
+bar=$(cabal list-bin mybar)
+[ ! -x "$bar" ] && echo "Couldn't find executable mybar in dist-newstyle" && exit 1
+cp -uf "$bar" ~/.local/bin/mybar
 xmonad --restart

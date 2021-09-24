@@ -13,7 +13,7 @@
 import XMonad
 import qualified XMonad.StackSet as W
 import XMonad.Actions.CycleRecentWS
-import XMonad.Actions.CycleWS ( toggleWS')
+import XMonad.Actions.CycleWS
 import XMonad.Actions.CopyWindow
 import XMonad.Actions.Navigation2D
 import XMonad.Actions.SpawnOn
@@ -82,18 +82,29 @@ import XMonad.Util.XSelection
 
 import Control.DeepSeq
 
+import Data.List.NonEmpty ( NonEmpty(..) )
+import qualified Data.List.NonEmpty as NE
+import Data.Functor
+
+-- import MyBar
+-- import Xmobar (xmobar)
+-- import Control.Concurrent
+-- import Control.Concurrent.STM
+
+import XMonad.Util.Loggers
+import XMonad.Util.WorkspaceCompare
+import XMonad.Hooks.StatusBar
+import XMonad.Hooks.StatusBar.PP
 
 startupApps = ["exec dunst"
               ,"exec picom"
               ,"feh --randomize --bg-fill ~/.wallpapers"
-              ,"~/scripts/restart-polybar"
               ]
 
-runInTerm t x = do
+runInTerm x = do
   term <- getTerm
-  pure $ term ++ " --title " ++ t ++ " -e sh -c '" ++ x ++ "'"
-sshCommand = runInTerm "weechat"
-  "TERM=xterm-256color mosh --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
+  pure $ term ++ " -e sh -c '" ++ x ++ "'"
+sshCommand = runInTerm "TERM=xterm-256color mosh --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
 
 staticProjects :: [Project]
 staticProjects =
@@ -132,6 +143,7 @@ myConfig ps
   -- $ withUrgencyHookC myUrgencyHook urgencyConfig{ suppressWhen = Focused }
   $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
   $ docks
+  $ dynamicSBs myBarConfigs
   $ modal regularMode
   $ myEwmh
   $ def
@@ -151,24 +163,130 @@ myConfig ps
                        , serverModeEventHookF "XMONAD_COMMAND" (myServer . unescapeArgs)
                        , windowedFullscreenFixEventHook
                        ]
-  , logHook            = updateMode <> colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
-  , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir
+  , logHook            = colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
+  , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir >> toggleScreens
   } `additionalKeysP` myKeyBindings
     `additionalMouseBindings` myMouseBindings
           -- )`removeKeysP` [pref ++ [n] | pref <- ["M-S-","M-"], n <- ['1'..'9']])
 
 myMouseBindings = []
 
+myBarConfigs :: ScreenId -> IO StatusBarConfig
+myBarConfigs n@(S i) = do
+  let polybarOnMSI
+        | n == 0    = statusBarGeneric "polybar mybar" (pure ())
+        | otherwise = mempty
+  xmobar <- statusBarPipe ("mybar " ++ show i) (pure $ xmobarForScreen n)
+  -- logQueue <- newTQueueIO
+  -- tid <- forkIO (xmobar (barConfig i logQueue))
+  pure $ polybarOnMSI <> xmobar {-StatusBarConfig
+      { sbLogHook = liftIO . atomically . writeTQueue logQueue =<< dynamicLogString (xmobarForScreen n)
+      , sbStartupHook = pure ()
+      , sbCleanupHook = liftIO $ do
+          killThread tid
+          pure ()
+      }-}
+
+xmobarForScreen :: ScreenId -> PP
+xmobarForScreen screen
+  = def
+  { ppCurrent = nerdBordersRound 
+               -- ^ how to print the tag of the currently focused
+               -- workspace
+  , ppVisible = xmobarColor "#908e92" ""
+    -- ^ how to print tags of visible but not focused
+    -- workspaces (xinerama only)
+  , ppHidden  = id
+    -- ^ how to print tags of hidden workspaces which
+    -- contain windows
+  , ppHiddenNoWindows = const ""
+    -- ^ how to print tags of empty hidden workspaces
+  , ppVisibleNoWindows = Nothing
+    -- ^ how to print tags of empty visible workspaces
+  , ppUrgent = xmobarColor "yellow" ""
+    -- ^ format to be applied to tags of urgent workspaces.
+  , ppRename = \s ws -> xmobarAction ("xmonadctl project " ++ W.tag ws) "1" s
+    -- ^ rename/augment the workspace tag
+    --   (note that @WindowSpace -> …@ acts as a Reader monad)
+  , ppSep = " | "
+  , ppWsSep = " "
+  , ppTitle = const ""
+  , ppTitleSanitize = id
+  , ppLayout = const ""
+  , ppOrder = \(wss:_l:_t:curws:title:xs) -> [xmobarColor "#2b2b2b" "#9acaca" $ xmobarAction "xmonadctl cyclews" "1" curws,scroll wss]
+                                          ++ xs
+                                          ++ [xmobarColor "#fa609f" "" title]
+  , ppSort = do
+      st <- getSortByIndex
+      pure $ (filterOutWs ["NSP"] . st)
+  , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, dirL, mergeL, branchL]
+  }
+  where
+    scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
+    branchL = do
+      Just ws <- logCurrentOnScreen screen
+      Just proj <- lookupProject ws
+      dir <- io . canonicalizePath $ expandHome "/home/zubin" $ projectDirectory proj
+      branch <- L.trim <$> runProcessWithInput "git" ["-C",dir, "rev-parse","--abbrev-ref","HEAD"] ""
+      let branchText
+            | branch /= "master" = Just $ xmobarColor "#f0a0a0" "" branch
+            | otherwise = Nothing
+      pure branchText
+    mergeL = do
+      willMerge <- willHookNext "merge"
+      pure $ if willMerge then Just "merge" else Nothing
+    modeL = do
+      mode <- ES.gets M.label
+      m <- isCurMirrored
+      let modeColor = case mode of
+            "nav" -> "#f0a000"
+            "minimal" -> "#f04000"
+            _ -> "#cacaca"
+      let layouticon = xmobarFont 1 $ if m then "\57354" else "\57353"
+      let prettyMode
+            = Just $ nerdBordersPoint modeColor (layouticon ++ mode)
+      pure prettyMode
+    dirL = do
+      Just ws <- logCurrentOnScreen screen
+      Just proj <- lookupProject ws
+      dir <- io . canonicalizePath $ expandHome "/home/zubin" $ projectDirectory proj
+      let reldir = makeRelative "/home/zubin" dir
+          parents = joinPath $ map (take 5) $ splitPath $ takeDirectory reldir
+          prettyDir = Just
+                    $ xmobarColor "#fa4a9a" ""
+                    $ addTrailingPathSeparator
+                    $ normalise
+                    $ "~" </> replaceDirectory reldir parents
+      pure prettyDir
+
+    nerdBordersPoint fillColor xs = xmobarColor "#2b2b2b" fillColor $ a ++ xmobarBorder "Bottom" fillColor 2 xs ++ b
+      where [x,y] = "\57532\57534"
+            a = xmobarFont 2 [x]
+            b = xmobarFont 2 [y]
+
+    nerdBordersRound xs = (a ++ (xmobarColor "#2b2b2b" color xs) ++ b)
+      where [x,y] = "\57534\57532"
+            a = "" -- xmobarColor color "#2b2b2b" $ xmobarFont 3 [x]
+            b = "" -- xmobarColor color "#2b2b2b" $ xmobarFont 3 [y]
+            color = "#cacaca"
+
 myUrgencyHook :: Window -> X ()
 myUrgencyHook w = do
   name <- getName w
   safeSpawn "notify-send" ["Urgent!",show name]
+
+toggleScreens :: X ()
+toggleScreens = do
+  spawn "xrandr --output HDMI-2 --auto --left-of eDP-1"
+  spawn "kmonad ~/builds/kmonad/gk61.kbd&"
 
 setProjectDir = do
   d <- expandHome "/home/zubin" . projectDirectory <$> currentProject
   io $ setCurrentDirectory d
 
 myServer :: [String] -> X ()
+myServer ["workspace","next"] = moveTo Next (Not emptyWS)
+myServer ["workspace","prev"] = moveTo Prev (Not emptyWS)
 myServer ["scratchpad",x] = namedScratchpadAction scratchpads x
 myServer ["project",x] = lookupProject x >>= \case
   Nothing -> safeSpawn "notify-send" ["no project", x]
@@ -179,12 +297,8 @@ myServer ["cd",dir] = do
   dir' <- liftIO $ makeAbsolute dir
   modifyProject (\p -> p { projectDirectory = dir' })
 myServer ["focus",readMaybe -> Just w] = focus w
+myServer ["cyclews"] = cycleWorkspacesOnScreens
 myServer xs = safeSpawn "notify-send" ["Couldn't recognize cmd", unwords xs]
-
-isCurMirrored :: X Bool
-isCurMirrored = do
-  w <- gets (W.currentTag . windowset)
-  ES.gets (M.findWithDefault False w . getMirrored)
 
 data ExtT = PersistentE | StateE
 newtype Ext (t :: ExtT) a = Ext a
@@ -196,19 +310,7 @@ instance (Default a, ExtensionClass a) => ExtensionClass (Ext StateE a) where
   initialValue = Ext def
   extensionType = StateExtension @a . coerce
 
-newtype Mirrored = Mirrored { getMirrored :: M.Map WorkspaceId Bool }
-  deriving stock (Read, Show, Typeable)
-  deriving ExtensionClass via Ext PersistentE Mirrored
-
-instance Default Mirrored where
-  def = Mirrored mempty
-
-mirrorLayout = do
-  w <- gets (W.currentTag . windowset)
-  sendMessage $ MT.Toggle MIRROR
-  let invertor Nothing = Just True
-      invertor (Just x) = Just (not x)
-  ES.modify (Mirrored . M.alter invertor w . getMirrored)
+isCurMirrored = withWindowSet (fmap (fromMaybe False) . isToggleActive MIRROR . W.workspace . W.current)
 
 resizeIn :: Direction2D -> X ()
 resizeIn d = do
@@ -238,8 +340,8 @@ instance LayoutModifier FocusLayout Window where
     wold <- getFocused
     hist <- getFocusHistory <$> ES.get
     wnew <- windowHistoryHook wold
-    case wnew of
-      Just w | Just w /= wold -> do
+    case (wnew, wold) of
+      (Just w, Just oldw) | w /= oldw -> do
         let oldstack = W.stack ws
         let mw = L.find (`elem` W.integrate' oldstack) hist
         let newstack = if (w `elem` (W.integrate' oldstack))
@@ -249,7 +351,7 @@ instance LayoutModifier FocusLayout Window where
                          Nothing -> oldstack
         modifyWindowSet (W.focusWindow w)
         addAction $ do
-          maybe (return ()) makeBorderNormal wold
+          makeBorderNormal oldw
           windows id
         runLayout ws{W.stack = newstack} rct
       _ -> runLayout ws rct
@@ -287,6 +389,10 @@ raiseFloating w = do
   else return ()
 
 updateMode = do
+  conf <- asks config
+  logHook conf
+
+updateMode' = do
   mode <- ES.gets M.label
   willMerge <- willHookNext "merge"
   m <- isCurMirrored
@@ -396,15 +502,23 @@ dynamicScratchpadQuery = do
 
 makeDynamicScratchpad :: X ()
 makeDynamicScratchpad = do
-  ES.put . DS =<< logTitle =<< getFocused
+  new <- getFocused
+  DS old <- ES.get
+  ES.put . DS =<< updateState old new
   where
-    logTitle Nothing = do
+    removeExisting = do
       spawn "notify-send 'Removing dynamic scratchpad!'"
       pure Nothing
-    logTitle (Just w) = do
-      n <- show <$> getName w
-      spawn $ "notify-send 'Adding dynamic scratchpad!' '" ++ n ++ "'"
-      pure (Just w)
+
+    -- Add if new window
+    updateState _ Nothing = removeExisting
+    updateState old (Just w) = do
+      case old of
+        Just w' | w == w' -> removeExisting
+        _ -> do
+          n <- show <$> getName w
+          spawn $ "notify-send 'Adding dynamic scratchpad!' '" ++ n ++ "'"
+          pure (Just w)
 
 dynamicScratchpadAction :: X ()
 dynamicScratchpadAction = do
@@ -477,7 +591,7 @@ manageApps = composeAll
     , resource =? "battop"             --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.6)
     , resource =? "calcurse"           --> doRectFloat (centerAligned 0.80 (14/1080) 0.40 0.5)
     , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (14/1080) 0.58 0.6)
-    , resource =? "neomutt"            --> doRectFloat (W.RationalRect 0.42 (14/1080) 0.58 0.6)
+    , resource =? "neomutt"            --> doRectFloat (W.RationalRect 0.0 (14/1080) 0.7 0.6)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "kittypopup"         --> doRectFloat (centerAligned 0.5 0.2 0.55 0.65)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
@@ -587,7 +701,7 @@ appLaunchBindings =
     ,("M-C-e", spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
     -- ,("M-C-b", spawn "ROFI_SEARCH='ddgr' rofi -modi blocks -blocks-wrap rofi-search -show blocks -lines 10 -eh 4 -kb-custom-1 'Control+y' -color-window 'argb:f32b2b2b, argb:B3000000, argb:E6ffffff'")
     ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
-    ,("M-S-f", spawnHere =<< runInTerm "ranger" "ranger")
+    ,("M-S-f", spawnHere =<< runInTerm "ranger")
     ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"])
     ,("<Insert>", pasteSelection)
 
@@ -601,6 +715,7 @@ appLaunchBindings =
     ,("M-S-=", spawn "~/scripts/html.sh")
     -- ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
+    ,("M-S-c", spawn "rofi -modi 'clipboard:greenclip print' -show clipboard -run-command '{cmd}'")
     ,("M-S-s", saveWindows True)
     ,("M-S-r", restoreWindows)
     ,("M-M1-<Backspace>", spawn "~/scripts/lock")
@@ -667,6 +782,9 @@ xmonadControlKeys =
     ,("S-n", windows W.swapDown)
     ,("S-p", windows W.swapUp)
     ,("S-u", focusUrgent >> clearUrgents)
+    ,("M1-d", cycleWorkspacesOnScreens)
+    ,("S-d", cycleFocusOnScreens)
+    ,("M1-e", sendCurrentWindowToNext)
     ,("`", toggleWS' ["NSP"])
     ,("S-x", kill1)
     ,("<Tab>",cycleWindowSets cycleOptions [xK_Super_L] xK_Tab xK_grave)
@@ -677,7 +795,7 @@ xmonadControlKeys =
     ,("C-d", sendMessage $ SPACING $ negate 5)
     ,("C-i", sendMessage $ SPACING 5)
     ,("b", sendMessage ToggleStruts)
-    ,("z", mirrorLayout >> updateMode )
+    ,("z", sendMessage (MT.Toggle MIRROR) >> updateMode )
     ,("C-S-d", removeWorkspace >> saveProjectState)
     ,(";", switchProjectPrompt myXPConfig >> saveProjectState)
     ,("d", changeProjectDirPrompt myXPConfig >> saveProjectState >> updateMode)
@@ -695,7 +813,7 @@ xmonadControlKeys =
     ,("a", mergeMarked)
     ,("s", swapWithMarked)
     ,("o", shiftMarked)
-    ,("c", spawn "LANG=en_IN.UTF-8 rofi -show calc -width 880 -lines 20 -no-show-match -no-sort -calc-command \"echo -n '{result}' | xsel -b\" ")
+    ,("c", spawn "LANG=en_IN.UTF-8 rofi -show calc -theme Arc-Dark -location 2 -no-show-match -no-sort -calc-command \"echo -n '{result}' | xsel -b\" ")
     ,("S-a", unmergeFocused)
     ,("[", onGroup W.focusUp')
     ,("]", onGroup W.focusDown')
@@ -708,6 +826,31 @@ xmonadControlKeys =
     ,("C-k", resizeIn U)
     ,("C-j", resizeIn D)
     ]
+
+sendCurrentWindowToNext = 
+  windows $ \ws -> do
+    case W.visible ws of
+      [] -> ws
+      ((W.tag . W.workspace -> w):_) ->  W.view w $ W.shift w ws
+
+
+cycleWorkspacesOnScreens =
+  windows $ \ws ->
+    let screens = W.current ws :| W.visible ws
+        visibleWs = fmap W.workspace screens
+        visibleWs' = rotateNE 1 visibleWs
+        current' :| visible' = NE.zipWith (\sc w' -> sc { W.workspace  = w'}) screens visibleWs'
+
+        rotateNE n xs = NE.fromList $ NE.drop n $ NE.cycle xs
+      in ws { W.current = current', W.visible = visible' }
+
+cycleFocusOnScreens =
+  windows $ \ws ->
+    let screens = W.current ws :| W.visible ws
+        current' :| visible' = rotateNE 1 screens
+
+        rotateNE n xs = NE.zipWith (flip const) screens $ NE.fromList $ NE.drop n $ NE.cycle xs
+      in ws { W.current = current', W.visible = visible' }
 
 bringCopyAsTabbed = WithWindow "Bring copy to tab group: " $ \w -> do
   cur <- getFocused
@@ -916,6 +1059,7 @@ mergeMarked = do
   marked <- getMarked
   case (cur,marked) of
     (Just c, Just w) -> do
+      windows $ \ss -> W.shiftWin (W.currentTag ss) c ss
       sendMessage $ Migrate w c
       unmark
       windows $ W.focusWindow w

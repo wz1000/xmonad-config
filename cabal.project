@@ -1,3 +1,10 @@
 packages:
   ./
+  ./xmonad/
   ./xmonad-contrib/
+  ./xmobar/
+
+constraints: xmobar +all_extensions
+profiling: True
+-- package *
+--   ghc-options: -finfo-table-map -fdistinct-constructor-tables
