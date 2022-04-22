@@ -33,7 +33,7 @@ executable mybar
 executable xmonad
   hs-source-dirs:      ., src
   main-is:             xmonad.hs
-  ghc-options:         -O2 -Wunused-imports "-with-rtsopts=-p"
+  ghc-options:         -O2 -Wunused-imports -rtsopts
   default-language:    Haskell2010
   other-modules:       Spacing, Grab, Modal, XMonad.Layout.ResizableTileSub
   build-depends:         base >= 4.7

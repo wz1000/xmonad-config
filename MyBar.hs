@@ -31,8 +31,8 @@ barConfig n = defaultConfig {
                , Run $ Swap [] 10
                , Run $ Date "%a %b %_d %H:%M" "date" 50
                , Run UnsafeStdinReader
-               , Run $ Mail [("gmail","~/Mail/gmail/INBOX/")
-                            ,("wt", "~/Mail/well-typed/INBOX/")
+               , Run $ Mail [("gmail","~/Mail/gmail/Inbox/")
+                            ,("wt", "~/Mail/well-typed/Inbox/")
                             ]
                             "mail"
                -- , Run $ QueueReader q id "UnsafeStdinReader"
@@ -40,7 +40,7 @@ barConfig n = defaultConfig {
               ]
   , sepChar = "%"
   , alignSep = "}{"
-  , template = "%UnsafeStdinReader% } { %diskio% | %mail% | %date%"
+  , template = "%UnsafeStdinReader% }{ %mail% | %date%"
 }
 
 main = do

@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
@@ -85,16 +86,19 @@ import Control.DeepSeq
 import Data.List.NonEmpty ( NonEmpty(..) )
 import qualified Data.List.NonEmpty as NE
 import Data.Functor
+import Data.Semigroup
 
 -- import MyBar
 -- import Xmobar (xmobar)
 -- import Control.Concurrent
 -- import Control.Concurrent.STM
+import Data.IORef
 
 import XMonad.Util.Loggers
 import XMonad.Util.WorkspaceCompare
 import XMonad.Hooks.StatusBar
 import XMonad.Hooks.StatusBar.PP
+import KeyDesc
 
 startupApps = ["exec dunst"
               ,"exec picom"
@@ -166,10 +170,44 @@ myConfig ps
   , logHook            = colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
   , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir >> toggleScreens
   } `additionalKeysP` myKeyBindings
+    `removeMouseBindings` (map fst myMouseBindings)
     `additionalMouseBindings` myMouseBindings
           -- )`removeKeysP` [pref ++ [n] | pref <- ["M-S-","M-"], n <- ['1'..'9']])
 
-myMouseBindings = []
+myMouseBindings :: [((ButtonMask, Button), Window -> X ())]
+myMouseBindings = [((mod4Mask,4), const $ spawn "~/scripts/dvol2 -i 2" )
+                  ,((mod4Mask,5), const $ spawn "~/scripts/dvol2 -d 2" )
+                  ,((mod4Mask,2), mouseSwap)
+                  ]
+
+mouseSwap w1 = do
+  pos_r <- liftIO $ newIORef Nothing
+  mouseDrag (\x y -> liftIO $ writeIORef pos_r $ Just (x,y)) $ do
+    liftIO (readIORef pos_r) >>= \case
+      Nothing -> pure ()
+      Just (x,y) -> do
+        rects <- getAllRectangles
+        whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) ->
+          swapWindows w1 w2
+
+getAllRectangles = do ws <- gets windowset
+                      let allWindows = join $ map (W.integrate' . W.stack)
+                                         $ (W.workspace . W.current) ws
+                                         : (map W.workspace . W.visible) ws
+                                         ++ W.hidden ws
+                      allRects <- mapM getWindowRectangle allWindows
+                      return $ zip allRects allWindows
+
+getWindowRectangle :: Window -> X Rectangle
+getWindowRectangle window
+  = do d <- asks display
+       (_, x, y, w, h, _, _) <- io $ getGeometry d window
+
+         -- We can't use the border width returned by
+         -- getGeometry because it will be 0 if the
+         -- window isn't mapped yet.
+       b <- asks $ borderWidth . config
+       return $ Rectangle x y (w + 2*b) (h + 2*b)
 
 myBarConfigs :: ScreenId -> IO StatusBarConfig
 myBarConfigs n@(S i) = do
@@ -205,7 +243,7 @@ xmobarForScreen screen
     -- ^ how to print tags of empty visible workspaces
   , ppUrgent = xmobarColor "yellow" ""
     -- ^ format to be applied to tags of urgent workspaces.
-  , ppRename = \s ws -> xmobarAction ("xmonadctl project " ++ W.tag ws) "1" s
+  , ppRename = \s ws -> xmobarAction ("xmonadctl full " ++ W.tag ws) "3" $ xmobarAction ("xmonadctl project " ++ W.tag ws) "1" s
     -- ^ rename/augment the workspace tag
     --   (note that @WindowSpace -> …@ acts as a Reader monad)
   , ppSep = " | "
@@ -213,7 +251,10 @@ xmobarForScreen screen
   , ppTitle = const ""
   , ppTitleSanitize = id
   , ppLayout = const ""
-  , ppOrder = \(wss:_l:_t:curws:title:xs) -> [xmobarColor "#2b2b2b" "#9acaca" $ xmobarAction "xmonadctl cyclews" "1" curws,scroll wss]
+  , ppOrder = \(wss:_l:_t:curws:title:xs) -> [ xmobarColor "#2b2b2b" "#9acaca"
+                                                $ xmobarAction "xmonadctl cyclews" "1"
+                                                $ xmobarAction ("xmonadctl mono " ++ curws) "3" curws
+                                             , scroll wss]
                                           ++ xs
                                           ++ [xmobarColor "#fa609f" "" title]
   , ppSort = do
@@ -277,20 +318,42 @@ myUrgencyHook w = do
 
 toggleScreens :: X ()
 toggleScreens = do
-  spawn "xrandr --output HDMI-2 --auto --left-of eDP-1"
+  spawn "xrandr --output DP-1 --left-of eDP-1 --mode 2560x1440"
   spawn "kmonad ~/builds/kmonad/gk61.kbd&"
 
 setProjectDir = do
   d <- expandHome "/home/zubin" . projectDirectory <$> currentProject
   io $ setCurrentDirectory d
 
+-- | Send a message to the given workspace
+sendToWorkspace :: Message a => WorkspaceId -> a -> X ()
+sendToWorkspace t a = windowBracket_ $ do
+    scs <- W.screens <$> gets windowset
+    mls <- mapM (\w -> if W.tag (W.workspace w) == t then handleMessage (W.layout $ W.workspace w) (SomeMessage a) `catchX` return Nothing else return Nothing) scs
+    let (cur:vis) = [ sc{ W.workspace = (W.workspace sc) { W.layout = fromMaybe oldL ml }}
+                  | (sc,ml) <- zip scs mls
+                  , let oldL = W.layout $ W.workspace sc
+                  ]
+    modifyWindowSet $ \ws -> ws { W.current = cur
+                                , W.visible = vis
+                                }
+    return (Any True)
+
+
 myServer :: [String] -> X ()
 myServer ["workspace","next"] = moveTo Next (Not emptyWS)
 myServer ["workspace","prev"] = moveTo Prev (Not emptyWS)
 myServer ["scratchpad",x] = namedScratchpadAction scratchpads x
-myServer ["project",x] = lookupProject x >>= \case
-  Nothing -> safeSpawn "notify-send" ["no project", x]
+myServer ["project",name] = lookupProject name >>= \case
+  Nothing | null name -> safeSpawn "notify-send" ["empty project"]
+          | otherwise -> switchProject (defProject name)
   Just p -> switchProject p
+myServer ["mono",x] = withWindowSet $ \ws -> case W.peek $ W.view x ws of
+  Nothing -> safeSpawn "notify-send" ["no window", x]
+  Just w -> sendToWorkspace x $ maximizeRestore w
+myServer ["full",x] = withWindowSet $ \ws -> case W.peek $ W.view x ws of
+  Nothing -> safeSpawn "notify-send" ["no window", x]
+  Just w -> floatFull' (sendToWorkspace x) w
 myServer ["hook",x] = toggleHookNext x
 myServer ["migrate",readMaybe -> Just w, readMaybe -> Just x] = sendMessage $ Migrate w (x :: Window)
 myServer ["cd",dir] = do
@@ -591,7 +654,7 @@ manageApps = composeAll
     , resource =? "battop"             --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.6)
     , resource =? "calcurse"           --> doRectFloat (centerAligned 0.80 (14/1080) 0.40 0.5)
     , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (14/1080) 0.58 0.6)
-    , resource =? "neomutt"            --> doRectFloat (W.RationalRect 0.0 (14/1080) 0.7 0.6)
+    , resource =? "neomutt"            --> doRectFloat (W.RationalRect 0.3 (0.4-22/1080) 0.7 0.6)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "kittypopup"         --> doRectFloat (centerAligned 0.5 0.2 0.55 0.65)
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
@@ -604,6 +667,7 @@ manageApps = composeAll
                                         <* liftX (addAction $ saveWindows False)
     , className =? "mpv"               --> mergeIntoFocusedIf (not <$> className =? "firefox")
                                         <* liftX (addAction $ saveWindows False)
+    , resource =? "gnome-pie"          --> doIgnore <> hasBorder False
     , manageDocks
     ]
     where
@@ -640,16 +704,16 @@ raiseNew = do
     else ws
 
 restartXMonad = do
-  broadcastMessage ReleaseResources
-  io . flush =<< asks display
   writeStateToFile
   spawn (kittyPopup++" --class xmonadrestart -e /home/zubin/.xmonad/restart-cabal.sh")
+  broadcastMessage ReleaseResources
+  io . flush =<< asks display
 
 myKeyBindings = concat
     [ xmonadControlBindings
     , appLaunchBindings
     , windowBindings
-    , mediaBindings
+    , map keyAct mediaBindings
     ] ++ [("M-M1-<F"++n++">", spawn ("chvt " ++ n)) | i <- [1..7], let n = show i]
 
 setMode m = do
@@ -659,7 +723,7 @@ setMode m = do
 regularMode c = Mode "normal" GrabBound $ M.union additions (keys c c)
   where
     additions = mkKeymap c $
-      [("M-<Esc>", setMode (navMode c))
+      [("M-C-<Esc>", setMode (navMode c))
       ,("M-S-<Esc>", setMode (minimalMode c))
       ]
 
@@ -723,6 +787,11 @@ appLaunchBindings =
     ,("S-<Print>", spawn "maim -us ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ,("M-<Print>", spawn "maim -ui $(xdotool getactivewindow) ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
     ,("M-C-g", openGHC)
+    -- Dunst
+    ,("C-`", spawn "dunstctl history-pop")
+    ,("C-<Space>", spawn "dunstctl close")
+    ,("C-S-<Space>", spawn "dunstctl action")
+    ,("C-M1-t", scratchPieMenu)
     ] ++ namedScratchpadActions
     where
       namedScratchpadActions = [ ("M-C-"++[k], namedScratchpadAction scratchpads act) | (k, act) <- namedScratchpadPads]
@@ -734,6 +803,8 @@ appLaunchBindings =
         ,('v',"pavucontrol")
         ,('f',"mpvytdl")
         ]
+
+scratchPieMenu = runProcessWithInput "pmenu" [] (unlines $ map name scratchpads) >>= namedScratchpadAction scratchpads . L.trim
 
 openGHC :: X ()
 openGHC = getSelection >>= \case
@@ -758,18 +829,21 @@ floatFull = do
   mw <- getFocused
   case mw of
     Nothing -> pure ()
-    Just w -> do
-      floating <- gets $ W.floating . windowset
-      let mr = M.lookup w floating
-      case mr of
-        Nothing -> sendMessage ToggleLayout
-        Just r
-          | r == W.RationalRect 0 0 1 1 -> do
-              broadcastMessage $ RemoveFullscreen w
-              sendMessage FullscreenChanged
-          | otherwise -> do
-              broadcastMessage $ AddFullscreen w
-              sendMessage FullscreenChanged
+    Just w -> floatFull' sendMessage w
+
+floatFull' :: (forall a. Message a => a -> X ()) -> Window -> X ()
+floatFull' sendMessage w = do
+  floating <- gets $ W.floating . windowset
+  let mr = M.lookup w floating
+  case mr of
+    Nothing -> sendMessage ToggleLayout
+    Just r
+      | r == W.RationalRect 0 0 1 1 -> do
+          broadcastMessage $ RemoveFullscreen w
+          sendMessage FullscreenChanged
+      | otherwise -> do
+          broadcastMessage $ AddFullscreen w
+          sendMessage FullscreenChanged
 
 cycleOptions w = filter (/= "NSP") $ map W.tag $ tail (W.workspaces w) ++ [head (W.workspaces w)]
 
@@ -778,7 +852,8 @@ xmonadControlBindings = addSuperPrefix xmonadControlKeys
 xmonadControlKeys =
     [("n", windows W.focusDown)
     ,("p", windows W.focusUp)
-    ,("y", withFocused (sendMessage . maximizeRestore))
+    ,("f", withFocused (sendMessage . maximizeRestore))
+    ,("y", floatFull)
     ,("S-n", windows W.swapDown)
     ,("S-p", windows W.swapUp)
     ,("S-u", focusUrgent >> clearUrgents)
@@ -801,7 +876,6 @@ xmonadControlKeys =
     ,("d", changeProjectDirPrompt myXPConfig >> saveProjectState >> updateMode)
     ,("w", shiftToProjectPrompt myXPConfig)
     ,("e", dwmpromote )
-    ,("f", floatFull)
     ,("/", windowPrompt highlightConfig Goto allWindows)
     ,("C-/", tabPrompt)
     ,("S-/", windowMultiPrompt highlightConfig [(bringAsTabbed,allWindows),(Bring,allWindows)])
@@ -891,21 +965,22 @@ windowKeys = do
      ]
 
 mediaBindings =
-    [("<XF86AudioNext>", spawn "mpc next")
-    ,("<XF86AudioPrev>", spawn "mpc prev")
-    ,("<XF86AudioPlay>", spawn "mpc toggle")
-    ,("S-<XF86AudioPlay>", spawn "~/scripts/mpris-toggle")
-    ,("<XF86AudioStop>", spawn "mpc stop")
-    ,("<XF86AudioMute>", spawn "~/scripts/dvol2 -t")
-    ,("<XF86AudioLowerVolume>", spawn "~/scripts/dvol2 -d 2")
-    ,("<XF86AudioRaiseVolume>", spawn "~/scripts/dvol2 -i 2")
-    ,("<XF86MonBrightnessUp>", spawn "light -A 5")
-    ,("<XF86MonBrightnessDown>", spawn "light -U 5")
-    ,("M-m m", spawn "clerk -t")
-    ,("M-m n", spawn "mpc next")
-    ,("M-m p", spawn "mpc prev")
-    ,("M-m s", spawn "~/scripts/mpd-notify 8000")
-    ,("M-m <Space>", spawn "mpc toggle")
+    [ KeyBindL "<XF86AudioNext>" $ spawn "playerctl next"
+    , KeyBindL "<XF86AudioPrev>" $ spawn "playerctl previous"
+    , KeyBindL "<XF86AudioPlay>" $ spawn "playerctl play-pause"
+    , KeyBindL "<XF86AudioPause>" $ spawn "playerctl play-pause"
+    , KeyBindL "S-<XF86AudioPlay>" $ spawn "~/scripts/mpris-toggle"
+    , KeyBindL "<XF86AudioStop>" $ spawn "playerctl stop"
+    , KeyBindL "<XF86AudioMute>" $ spawn "~/scripts/dvol2 -t"
+    , KeyBindL "<XF86AudioLowerVolume>" $ spawn "~/scripts/dvol2 -d 2"
+    , KeyBindL "<XF86AudioRaiseVolume>" $ spawn "~/scripts/dvol2 -i 2"
+    , KeyBindL "<XF86MonBrightnessUp>" $ spawn "light -A 5"
+    , KeyBindL "<XF86MonBrightnessDown>" $ spawn "light -U 5"
+    , KeyBindL "M-m m" $ spawn "clerk -t"
+    , KeyBindL "M-m n" $ spawn "mpc next"
+    , KeyBindL "M-m p" $ spawn "mpc prev"
+    , KeyBindL "M-m s" $ spawn "~/scripts/mpd-notify 8000"
+    , KeyBindL "M-m <Space>" $ spawn "mpc toggle"
     ]
 
 myTabTheme = def { activeColor = "#cccccc"
