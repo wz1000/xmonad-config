@@ -22,7 +22,7 @@ import XMonad.Actions.DwmPromote
 import XMonad.Actions.DynamicProjects
 import XMonad.Actions.DynamicWorkspaces
 import XMonad.Actions.UpdatePointer
-import XMonad.Layout.Fullscreen ( fullscreenFloat, FullscreenMessage(..) )
+import XMonad.Layout.Fullscreen ( fullscreenFloat, FullscreenMessage(..), fullscreenFocus )
 import XMonad.Layout.Simplest
 import XMonad.Layout.Maximize
 -- import XMonad.Layout.LayoutCombinators
@@ -99,16 +99,18 @@ import XMonad.Util.WorkspaceCompare
 import XMonad.Hooks.StatusBar
 import XMonad.Hooks.StatusBar.PP
 import KeyDesc
+import XMonad.Actions.Submap
+import XMonad.Util.NamedActions
+import XMonad.Util.XUtils
 
 startupApps = ["exec dunst"
               ,"exec picom"
               ,"feh --randomize --bg-fill ~/.wallpapers"
               ]
 
-runInTerm x = do
-  term <- getTerm
-  pure $ term ++ " -e sh -c '" ++ x ++ "'"
-sshCommand = runInTerm "TERM=xterm-256color mosh --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
+runInTerm mt x = do
+  pure $ myTerm ++ (case mt of Just title -> " --title " ++ title; Nothing -> "") ++ " -e sh -c '" ++ x ++ "'"
+sshCommand = runInTerm (Just "irc") "TERM=xterm-256color mosh --ssh=\"ssh -i ~/.ssh/hetzner-irc\" $(cat ~/.ssh/irchost) tmux attach"
 
 staticProjects :: [Project]
 staticProjects =
@@ -260,7 +262,7 @@ xmobarForScreen screen
   , ppSort = do
       st <- getSortByIndex
       pure $ (filterOutWs ["NSP"] . st)
-  , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, dirL, mergeL, branchL]
+  , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, numL , dirL, mergeL, branchL]
   }
   where
     scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
@@ -287,6 +289,11 @@ xmobarForScreen screen
       let prettyMode
             = Just $ nerdBordersPoint modeColor (layouticon ++ mode)
       pure prettyMode
+    numL = do
+      ss <- withWindowSet $ return . W.screens
+      case L.find ((== screen) . W.screen) ss of
+        Just s  -> pure . fmap (show . length) . W.stack . W.workspace $ s
+        Nothing -> pure Nothing
     dirL = do
       Just ws <- logCurrentOnScreen screen
       Just proj <- lookupProject ws
@@ -350,7 +357,7 @@ myServer ["project",name] = lookupProject name >>= \case
   Just p -> switchProject p
 myServer ["mono",x] = withWindowSet $ \ws -> case W.peek $ W.view x ws of
   Nothing -> safeSpawn "notify-send" ["no window", x]
-  Just w -> sendToWorkspace x $ maximizeRestore w
+  Just w -> sendToWorkspace x (ToggleFullscreen w)
 myServer ["full",x] = withWindowSet $ \ws -> case W.peek $ W.view x ws of
   Nothing -> safeSpawn "notify-send" ["no window", x]
   Just w -> floatFull' (sendToWorkspace x) w
@@ -527,7 +534,8 @@ myLayout = fullscreenFloat
          $ toggleLayouts (noBorders StateFull)
          $ smartBorders
          $ avoidStruts
-         $ maximizeWithPadding 0
+         $ fullscreenFocus
+         -- $ maximizeWithPadding 0
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
@@ -551,7 +559,10 @@ scratchpads =
   , NS "neomutt" (kittyPopup++" --class neomutt -e neomutt") (className =? "neomutt") defaultFloating
   , NS "mpvytdl" "notify-send 'No video scratchpad!'" (resource =? "mpvytdl") defaultFloating
   , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
+  , NS "scratchpad" (unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"]) (resource =? "scratchpad") (customFloating scratchpadDefaultRect)
   ]
+
+scratchpadDefaultRect = W.RationalRect 0.25 0.375 0.5 0.25
 
 newtype DynamicScratchpad
   = DS { getDynamicScratchpad :: Maybe Window }
@@ -689,10 +700,9 @@ myManageHook = composeAll
              , manageHook def
              , manageSpawn
              , manageApps
-             , scratchpadManageHookDefault
-             , namedScratchpadManageHook scratchpads
              , placeHook (smart (1/2,1/2))
              , toggleHook "merge" mergeIntoFocused
+             , namedScratchpadManageHook scratchpads
              ]
 
 raiseNew :: ManageHook
@@ -713,7 +723,7 @@ myKeyBindings = concat
     [ xmonadControlBindings
     , appLaunchBindings
     , windowBindings
-    , map keyAct mediaBindings
+    , mediaBindings
     ] ++ [("M-M1-<F"++n++">", spawn ("chvt " ++ n)) | i <- [1..7], let n = show i]
 
 setMode m = do
@@ -765,8 +775,8 @@ appLaunchBindings =
     ,("M-C-e", spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
     -- ,("M-C-b", spawn "ROFI_SEARCH='ddgr' rofi -modi blocks -blocks-wrap rofi-search -show blocks -lines 10 -eh 4 -kb-custom-1 'Control+y' -color-window 'argb:f32b2b2b, argb:B3000000, argb:E6ffffff'")
     ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
-    ,("M-S-f", spawnHere =<< runInTerm "ranger")
-    ,("M-g", scratchpadSpawnActionCustom $ unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"])
+    ,("M-S-f", spawnHere =<< runInTerm Nothing "ranger")
+    ,("M-g", namedScratchpadAction scratchpads "scratchpad" )
     ,("<Insert>", pasteSelection)
 
     ,("M-i", dynamicScratchpadAction)
@@ -794,15 +804,16 @@ appLaunchBindings =
     ,("C-M1-t", scratchPieMenu)
     ] ++ namedScratchpadActions
     where
-      namedScratchpadActions = [ ("M-C-"++[k], namedScratchpadAction scratchpads act) | (k, act) <- namedScratchpadPads]
-      namedScratchpadPads =
-        [('t',"htop")
-        ,('m',"ncmpcpp")
-        ,('n',"neomutt")
-        ,('c',"calcurse")
-        ,('v',"pavucontrol")
-        ,('f',"mpvytdl")
-        ]
+      namedScratchpadActions = [("M-v", mkVisualBindings (map (fmap (namedScratchpadAction scratchpads)) namedScratchpadPads))]
+
+namedScratchpadPads =
+  [ KeyBindL "h" "htop"
+  , KeyBindL "m" "ncmpcpp"
+  , KeyBindL "n" "neomutt"
+  , KeyBindL "c" "calcurse"
+  , KeyBindL "v" "pavucontrol"
+  , KeyBindL "f" "mpvytdl"
+  ]
 
 scratchPieMenu = runProcessWithInput "pmenu" [] (unlines $ map name scratchpads) >>= namedScratchpadAction scratchpads . L.trim
 
@@ -852,7 +863,7 @@ xmonadControlBindings = addSuperPrefix xmonadControlKeys
 xmonadControlKeys =
     [("n", windows W.focusDown)
     ,("p", windows W.focusUp)
-    ,("f", withFocused (sendMessage . maximizeRestore))
+    ,("f", withFocused (broadcastMessage . ToggleFullscreen) >> sendMessage FullscreenChanged)
     ,("y", floatFull)
     ,("S-n", windows W.swapDown)
     ,("S-p", windows W.swapUp)
@@ -964,24 +975,35 @@ windowKeys = do
      ,("S-M1-"++[key], screenSwap dir False)
      ]
 
+mkVisualBindings = visualSubmap myWindow . fmap (\x -> (concat $ showName x, getAction x)) . M.fromList . namedKeys (myConfig [])
+
+myWindow = WindowConfig
+ { winFont = "xft:Source Code Pro-10"
+ , winBg = "#2b2b2b"
+ , winFg = "white"
+ , winRect = CenterWindow
+ }
+
 mediaBindings =
-    [ KeyBindL "<XF86AudioNext>" $ spawn "playerctl next"
-    , KeyBindL "<XF86AudioPrev>" $ spawn "playerctl previous"
-    , KeyBindL "<XF86AudioPlay>" $ spawn "playerctl play-pause"
-    , KeyBindL "<XF86AudioPause>" $ spawn "playerctl play-pause"
-    , KeyBindL "S-<XF86AudioPlay>" $ spawn "~/scripts/mpris-toggle"
-    , KeyBindL "<XF86AudioStop>" $ spawn "playerctl stop"
-    , KeyBindL "<XF86AudioMute>" $ spawn "~/scripts/dvol2 -t"
-    , KeyBindL "<XF86AudioLowerVolume>" $ spawn "~/scripts/dvol2 -d 2"
-    , KeyBindL "<XF86AudioRaiseVolume>" $ spawn "~/scripts/dvol2 -i 2"
-    , KeyBindL "<XF86MonBrightnessUp>" $ spawn "light -A 5"
-    , KeyBindL "<XF86MonBrightnessDown>" $ spawn "light -U 5"
-    , KeyBindL "M-m m" $ spawn "clerk -t"
-    , KeyBindL "M-m n" $ spawn "mpc next"
-    , KeyBindL "M-m p" $ spawn "mpc prev"
-    , KeyBindL "M-m s" $ spawn "~/scripts/mpd-notify 8000"
-    , KeyBindL "M-m <Space>" $ spawn "mpc toggle"
-    ]
+    [ ("<XF86AudioNext>"        , spawn "playerctl next")
+    , ("<XF86AudioPrev>"        , spawn "playerctl previous")
+    , ("<XF86AudioPlay>"        , spawn "playerctl play-pause")
+    , ("<XF86AudioPause>"       , spawn "playerctl play-pause")
+    , ("S-<XF86AudioPlay>"      , spawn "~/scripts/mpris-toggle")
+    , ("<XF86AudioStop>"        , spawn "playerctl stop")
+    , ("<XF86AudioMute>"        , spawn "~/scripts/dvol2 -t")
+    , ("<XF86AudioLowerVolume>" , spawn "~/scripts/dvol2 -d 2")
+    , ("<XF86AudioRaiseVolume>" , spawn "~/scripts/dvol2 -i 2")
+    , ("<XF86MonBrightnessUp>"  , spawn "light -A 5")
+    , ("<XF86MonBrightnessDown>", spawn "light -U 5")
+    ] ++ [("M-m", mkVisualBindings mbs)]
+mbs =
+  [ KeyBindL "m" $ spawn "clerk -t"
+  , KeyBindL "n" $ spawn "mpc next"
+  , KeyBindL "p" $ spawn "mpc prev"
+  , KeyBindL "s" $ spawn "~/scripts/mpd-notify 8000"
+  , KeyBindL "<Space>" $ spawn "mpc toggle"
+  ]
 
 myTabTheme = def { activeColor = "#cccccc"
                  , activeBorderColor = "#cccccc"

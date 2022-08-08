@@ -35,7 +35,7 @@ executable xmonad
   main-is:             xmonad.hs
   ghc-options:         -O2 -Wunused-imports -rtsopts
   default-language:    Haskell2010
-  other-modules:       Spacing, Grab, Modal, XMonad.Layout.ResizableTileSub
+  other-modules:       Spacing, Grab, Modal, XMonad.Layout.ResizableTileSub, KeyDesc
   build-depends:         base >= 4.7
                        , containers
                        , xmonad

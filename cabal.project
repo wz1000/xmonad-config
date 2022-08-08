@@ -5,10 +5,7 @@ packages:
   ./xmobar/
 
 constraints: xmobar +all_extensions
-profiling: True
+profiling: False
 
 -- package *
 --   ghc-options: -finfo-table-map -fdistinct-constructor-tables
-
-index-state: 2022-03-16T10:53:01Z
-
