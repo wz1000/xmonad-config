@@ -262,7 +262,7 @@ xmobarForScreen screen
   , ppSort = do
       st <- getSortByIndex
       pure $ (filterOutWs ["NSP"] . st)
-  , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, numL , dirL, mergeL, branchL]
+  , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, numL , dirL, mergeL, splitL, branchL]
   }
   where
     scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
@@ -278,6 +278,9 @@ xmobarForScreen screen
     mergeL = do
       willMerge <- willHookNext "merge"
       pure $ if willMerge then Just "merge" else Nothing
+    splitL = do
+      willMerge <- willHookNext "splitDesktop"
+      pure $ if willMerge then Just "split" else Nothing
     modeL = do
       mode <- ES.gets M.label
       m <- isCurMirrored
@@ -702,8 +705,36 @@ myManageHook = composeAll
              , manageApps
              , placeHook (smart (1/2,1/2))
              , toggleHook "merge" mergeIntoFocused
+             , toggleHook "splitDesktop" (ask >>= liftX . splitDesktop' >> return mempty)
              , namedScratchpadManageHook scratchpads
              ]
+
+splitDesktop :: X ()
+splitDesktop =
+  getFocused >>= \case
+    Nothing -> pure ()
+    Just w -> splitDesktop' w
+
+splitDesktop' w = do
+  proj <- W.tag <$> gets (W.workspace . W.current . windowset)
+  let coproj = case L.stripSuffix "-split" proj of
+        Nothing -> proj ++ "-split"
+        Just p -> p
+  cycleFocusOnScreens
+  appendWorkspace coproj
+  windows $ \ws -> W.shiftWin coproj w ws
+
+killSplit :: X ()
+killSplit = do
+  cur <- W.tag <$> gets (W.workspace . W.current . windowset)
+  let (proj, splitProj) = case L.stripSuffix "-split" cur of
+        Nothing -> (cur, cur ++ "-split")
+        Just p -> (p, cur)
+  windows $
+      (\ws -> foldr (\w r -> W.shiftWin proj w r) ws (W.index ws))
+    . W.view splitProj
+  removeWorkspaceByTag splitProj
+  windows $ W.view proj
 
 raiseNew :: ManageHook
 raiseNew = do
@@ -786,7 +817,7 @@ appLaunchBindings =
     ,("M-r", shellPrompt myXPConfig)
     ,("M-S-z", zshPrompt myXPConfig "/home/zubin/scripts/capture.zsh")
     ,("M-S-v", spawn "~/scripts/playvid.sh")
-    ,("M-S-=", spawn "~/scripts/html.sh")
+    -- ,("M-S-=", spawn "~/scripts/html.sh")
     -- ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
     ,("M-S-c", spawn "rofi -modi 'clipboard:greenclip print' -show clipboard -run-command '{cmd}'")
@@ -876,6 +907,7 @@ xmonadControlKeys =
     ,("<Tab>",cycleWindowSets cycleOptions [xK_Super_L] xK_Tab xK_grave)
     ,("C-<Return>", dwmpromote )
     ,("S-m", toggleHookNext "merge" >> updateMode )
+    ,("M1-=", toggleHookNext "splitDesktop" >> updateMode )
     ,("C-r", refresh)
     ,("x", killCopy)
     ,("C-d", sendMessage $ SPACING $ negate 5)
@@ -910,6 +942,8 @@ xmonadControlKeys =
     ,("C-h", resizeIn L)
     ,("C-k", resizeIn U)
     ,("C-j", resizeIn D)
+    ,("=", splitDesktop)
+    ,("S-=", killSplit)
     ]
 
 sendCurrentWindowToNext = 
@@ -1156,7 +1190,7 @@ mergeMarked = do
   marked <- getMarked
   case (cur,marked) of
     (Just c, Just w) -> do
-      windows $ \ss -> W.shiftWin (W.currentTag ss) c ss
+      windows $ \ss -> W.shiftWin (W.currentTag ss) w ss
       sendMessage $ Migrate w c
       unmark
       windows $ W.focusWindow w
