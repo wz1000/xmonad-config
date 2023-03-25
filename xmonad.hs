@@ -387,10 +387,10 @@ myServer ["project",name] = lookupProject name >>= \case
   Just p -> switchProject p
 myServer ["mono",x] = withWindowSet $ \ws -> case W.peek $ W.view x ws of
   Nothing -> safeSpawn "notify-send" ["no window", x]
-  Just w -> sendToWorkspace x (ToggleFullscreen w)
+  Just w -> floatFull' (sendToWorkspace x) w
 myServer ["full",x] = withWindowSet $ \ws -> case W.peek $ W.view x ws of
   Nothing -> safeSpawn "notify-send" ["no window", x]
-  Just w -> floatFull' (sendToWorkspace x) w
+  Just w -> sendToWorkspace x (ToggleFullscreen w)
 myServer ["hook",x] = toggleHookNext x
 myServer ["migrate",readMaybe -> Just w, readMaybe -> Just x] = sendMessage $ Migrate w (x :: Window)
 myServer ["cd",dir] = do
@@ -561,10 +561,10 @@ shrinkKak cs = cs : cs' : cs'' : moarShort shortDirs
     moarShort (x:xs) = x : moarShort xs
 
 myLayout = fullscreenFloat
-         $ toggleLayouts (noBorders StateFull)
-         $ smartBorders
-         $ avoidStruts
+         $ lessBorders OnlyScreenFloat
          $ fullscreenFocus
+         $ avoidStruts
+         $ toggleLayouts StateFull
          -- $ maximizeWithPadding 0
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
@@ -934,8 +934,8 @@ xmonadControlBindings = addSuperPrefix xmonadControlKeys
 xmonadControlKeys =
     [("n", windows W.focusDown)
     ,("p", windows W.focusUp)
-    ,("f", withFocused (broadcastMessage . ToggleFullscreen) >> sendMessage FullscreenChanged)
-    ,("y", floatFull)
+    ,("y", withFocused (broadcastMessage . ToggleFullscreen) >> sendMessage FullscreenChanged)
+    ,("f", floatFull)
     ,("S-n", windows W.swapDown)
     ,("S-p", windows W.swapUp)
     ,("S-u", focusUrgent >> clearUrgents)
