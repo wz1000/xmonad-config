@@ -67,11 +67,13 @@ import Modal hiding (defaultMode, normalMode, insertMode)
 import qualified Modal as M
 
 import Control.Monad
+import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Extra ( mapMaybeM, whenM )
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import qualified Data.List.Extra as L
 import Data.Coerce
+import Data.Time
 import Data.Maybe
 import System.IO
 import System.Posix.Types (ProcessID)
@@ -179,7 +181,10 @@ myConfig ps
 myMouseBindings :: [((ButtonMask, Button), Window -> X ())]
 myMouseBindings = [((mod4Mask,4), const $ spawn "~/scripts/dvol2 -i 2" )
                   ,((mod4Mask,5), const $ spawn "~/scripts/dvol2 -d 2" )
+                  ,((mod4Mask .|. controlMask ,4), const $ moveTo Next scrollableWorkspaces)
+                  ,((mod4Mask .|. controlMask ,5), const $ moveTo Prev scrollableWorkspaces)
                   ,((mod4Mask,2), mouseSwap)
+                  ,((mod4Mask .|. controlMask ,2), mouseMerge)
                   ]
 
 mouseSwap w1 = do
@@ -191,6 +196,16 @@ mouseSwap w1 = do
         rects <- getAllRectangles
         whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) ->
           swapWindows w1 w2
+
+mouseMerge w1 = do
+  pos_r <- liftIO $ newIORef Nothing
+  mouseDrag (\x y -> liftIO $ writeIORef pos_r $ Just (x,y)) $ do
+    liftIO (readIORef pos_r) >>= \case
+      Nothing -> pure ()
+      Just (x,y) -> do
+        rects <- getAllRectangles
+        whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) ->
+          sendMessage $ Merge w1 w2
 
 getAllRectangles = do ws <- gets windowset
                       let allWindows = join $ map (W.integrate' . W.stack)
@@ -230,7 +245,7 @@ myBarConfigs n@(S i) = do
 xmobarForScreen :: ScreenId -> PP
 xmobarForScreen screen
   = def
-  { ppCurrent = nerdBordersRound 
+  { ppCurrent = xmobarColor "#908e92" ""
                -- ^ how to print the tag of the currently focused
                -- workspace
   , ppVisible = xmobarColor "#908e92" ""
@@ -263,6 +278,15 @@ xmobarForScreen screen
       st <- getSortByIndex
       pure $ (filterOutWs ["NSP"] . st)
   , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, numL , dirL, mergeL, splitL, branchL]
+  , ppPrinters = do
+      pp <- asks wsPP
+      ws <- asks wsWindowSet
+      cur <- asks wsWS
+      case L.find ((== screen) . W.screen) (W.screens ws) of
+        Nothing -> ReaderT $ const Nothing
+        Just cur_screen
+          | W.tag cur == W.tag (W.workspace cur_screen) -> pure $ xmobarColor "#2b2b2b" "#9acaca"
+          | otherwise -> ReaderT $ const Nothing
   }
   where
     scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
@@ -328,8 +352,9 @@ myUrgencyHook w = do
 
 toggleScreens :: X ()
 toggleScreens = do
-  spawn "xrandr --output DP-1 --left-of eDP-1 --mode 2560x1440"
-  spawn "kmonad ~/builds/kmonad/gk61.kbd&"
+  spawn "xrandr --output DP-0 --left-of DP-2"
+  -- spawn "kmonad ~/kmonad/gk61.kbd&"
+  -- spawn "kmonad ~/kmonad/k2v2.kbd&"
 
 setProjectDir = do
   d <- expandHome "/home/zubin" . projectDirectory <$> currentProject
@@ -349,10 +374,12 @@ sendToWorkspace t a = windowBracket_ $ do
                                 }
     return (Any True)
 
+scrollableWorkspaces :: WSType
+scrollableWorkspaces = HiddenNonEmptyWS :&: ignoringWSs ["NSP"]
 
 myServer :: [String] -> X ()
-myServer ["workspace","next"] = moveTo Next (Not emptyWS)
-myServer ["workspace","prev"] = moveTo Prev (Not emptyWS)
+myServer ["workspace","next"] = moveTo Next scrollableWorkspaces
+myServer ["workspace","prev"] = moveTo Prev scrollableWorkspaces
 myServer ["scratchpad",x] = namedScratchpadAction scratchpads x
 myServer ["project",name] = lookupProject name >>= \case
   Nothing | null name -> safeSpawn "notify-send" ["empty project"]
@@ -824,18 +851,22 @@ appLaunchBindings =
     ,("M-S-s", saveWindows True)
     ,("M-S-r", restoreWindows)
     ,("M-M1-<Backspace>", spawn "~/scripts/lock")
-    ,("<Print>", spawn "maim -u ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
-    ,("S-<Print>", spawn "maim -us ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
-    ,("M-<Print>", spawn "maim -ui $(xdotool getactivewindow) ~/$(date '+%Y-%m-%d-%H%m%S_grab.png')")
+    ,("<Print>", screenshot [])
+    ,("S-<Print>", screenshot ["--select"])
+    ,("M-<Print>", withFocused $ \w -> screenshot ["--window",show w])
     ,("M-C-g", openGHC)
+    ,("M-C-s", copyTerminal)
     -- Dunst
     ,("C-`", spawn "dunstctl history-pop")
     ,("C-<Space>", spawn "dunstctl close")
-    ,("C-S-<Space>", spawn "dunstctl action")
+    ,("C-S-<Space>", spawn "dunstctl action 0")
     ,("C-M1-t", scratchPieMenu)
     ] ++ namedScratchpadActions
     where
       namedScratchpadActions = [("M-v", mkVisualBindings (map (fmap (namedScratchpadAction scratchpads)) namedScratchpadPads))]
+      screenshot opts = do
+        file <- liftIO $ formatTime defaultTimeLocale "/home/zubin/screens/%Y-%m-%d-%H%m%S_grab.png" <$> getZonedTime
+        safeSpawn "/home/zubin/scripts/notify-screen" (file:"--hidecursor":opts)
 
 namedScratchpadPads =
   [ KeyBindL "h" "htop"
@@ -853,6 +884,15 @@ openGHC = getSelection >>= \case
   '#':xs -> spawn $ "firefox 'https://gitlab.haskell.org/ghc/ghc/-/issues/"++xs++"'"
   '!':xs -> spawn $ "firefox 'https://gitlab.haskell.org/ghc/ghc/-/merge_requests/"++xs++"'"
   _ -> pure ()
+
+copyTerminal :: X ()
+copyTerminal = do
+  x <- getSelection <&>
+    unlines . map (map replacePrompt . trim . takeWhile (/= '\57522')) . lines
+  void $ runProcessWithInput "xsel" ["-pi"] x
+  where
+    replacePrompt '\10095' = '$'
+    replacePrompt x = x
 
 makeBorderRed :: Window -> X ()
 makeBorderRed w =
@@ -887,7 +927,7 @@ floatFull' sendMessage w = do
           broadcastMessage $ AddFullscreen w
           sendMessage FullscreenChanged
 
-cycleOptions w = filter (/= "NSP") $ map W.tag $ tail (W.workspaces w) ++ [head (W.workspaces w)]
+cycleOptions w = filter (/= "NSP") $ map W.tag $ filter (isJust . W.stack) (W.hidden w) ++ [W.workspace $ W.current w]
 
 xmonadControlBindings = addSuperPrefix xmonadControlKeys
 

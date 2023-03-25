@@ -4,8 +4,12 @@ packages:
   ./xmonad-contrib/
   ./xmobar/
 
-constraints: xmobar +all_extensions
+constraints: xmobar +all_extensions +with_xft
 profiling: False
+with-compiler: ghc-9.2
 
 -- package *
 --   ghc-options: -finfo-table-map -fdistinct-constructor-tables
+
+package xmonad-contrib
+  ghc-options: -j8
