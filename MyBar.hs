@@ -7,7 +7,7 @@ import System.Environment
 barConfig :: Int -> Config
 barConfig n = defaultConfig {
   font = "mononoki Nerd Font Mono Bold 10"
-  , additionalFonts = ["Siji 10.5", "mononoki Nerd Font Mono Bold 14", "mononoki Nerd Font Mono Bold 12"]
+  , additionalFonts = ["Siji 10.5", "mononoki Nerd Font Mono Bold 14", "mononoki Nerd Font Mono Bold 10.5"]
   , borderColor = "black"
   , border = NoBorder
   , borderWidth = 0

@@ -268,10 +268,11 @@ xmobarForScreen screen
   , ppTitle = const ""
   , ppTitleSanitize = id
   , ppLayout = const ""
-  , ppOrder = \(wss:_l:_t:curws:title:xs) -> [ xmobarColor "#2b2b2b" "#9acaca"
+  , ppOrder = \(wss:_l:_t:curws:title:mode:num:xs) -> [ nerdBordersRound
                                                 $ xmobarAction "xmonadctl cyclews" "1"
-                                                $ xmobarAction ("xmonadctl mono " ++ curws) "3" curws
+                                                $ xmobarAction ("xmonadctl mono " ++ curws) "3" num
                                              , scroll wss]
+                                          ++ [mode]
                                           ++ xs
                                           ++ [xmobarColor "#fa609f" "" title]
   , ppSort = do
@@ -292,7 +293,7 @@ xmobarForScreen screen
     scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
     branchL = do
       Just ws <- logCurrentOnScreen screen
-      Just proj <- lookupProject ws
+      proj <- fromMaybe (defProject ws) <$> lookupProject ws
       dir <- io . canonicalizePath $ expandHome "/home/zubin" $ projectDirectory proj
       branch <- L.trim <$> runProcessWithInput "git" ["-C",dir, "rev-parse","--abbrev-ref","HEAD"] ""
       let branchText
@@ -323,7 +324,7 @@ xmobarForScreen screen
         Nothing -> pure Nothing
     dirL = do
       Just ws <- logCurrentOnScreen screen
-      Just proj <- lookupProject ws
+      proj <- fromMaybe (defProject ws) <$> lookupProject ws
       dir <- io . canonicalizePath $ expandHome "/home/zubin" $ projectDirectory proj
       let reldir = makeRelative "/home/zubin" dir
           parents = joinPath $ map (take 5) $ splitPath $ takeDirectory reldir
@@ -340,9 +341,9 @@ xmobarForScreen screen
             b = xmobarFont 2 [y]
 
     nerdBordersRound xs = (a ++ (xmobarColor "#2b2b2b" color xs) ++ b)
-      where [x,y] = "\57534\57532"
-            a = "" -- xmobarColor color "#2b2b2b" $ xmobarFont 3 [x]
-            b = "" -- xmobarColor color "#2b2b2b" $ xmobarFont 3 [y]
+      where [x,y] = "\57526\57524"
+            a = xmobarColor color "#2b2b2b" $ xmobarFont 3 [x]
+            b = xmobarColor color "#2b2b2b" $ xmobarFont 3 [y]
             color = "#cacaca"
 
 myUrgencyHook :: Window -> X ()
