@@ -194,8 +194,9 @@ mouseSwap w1 = do
       Nothing -> pure ()
       Just (x,y) -> do
         rects <- getAllRectangles
-        whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) ->
+        whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) -> do
           swapWindows w1 w2
+          windows $ W.focusWindow w1
 
 mouseMerge w1 = do
   pos_r <- liftIO $ newIORef Nothing
@@ -268,17 +269,20 @@ xmobarForScreen screen
   , ppTitle = const ""
   , ppTitleSanitize = id
   , ppLayout = const ""
-  , ppOrder = \(wss:_l:_t:curws:title:mode:num:xs) -> [ nerdBordersRound
-                                                $ xmobarAction "xmonadctl cyclews" "1"
-                                                $ xmobarAction ("xmonadctl mono " ++ curws) "3" num
-                                             , scroll wss]
-                                          ++ [mode]
-                                          ++ xs
-                                          ++ [xmobarColor "#fa609f" "" title]
+  , ppOrder = \(wss:_l:_t:curws:title:mode:num:layout:xs) ->
+      [ xmobarAction "xmonadctl cyclews" "1"
+      $ xmobarAction "xmonadctl window prev" "4"
+      $ xmobarAction "xmonadctl window next" "5"
+      $ xmobarAction ("xmonadctl mono " ++ curws) "3"
+      $ nerdBordersRound (if layout == "Full" then "#805e91" else "#cacaca") num
+      , scroll wss]
+      ++ [mode]
+      ++ xs
+      ++ [xmobarColor "#fa609f" "" title]
   , ppSort = do
       st <- getSortByIndex
       pure $ (filterOutWs ["NSP"] . st)
-  , ppExtras = [logCurrentOnScreen screen,logTitleOnScreen screen, modeL, numL , dirL, mergeL, splitL, branchL]
+  , ppExtras = [logCurrentOnScreen screen,fmap (onNothing "". shrinkTitle) $ logTitleOnScreen screen, modeL, numL, logLayoutOnScreen screen , dirL, mergeL, splitL, branchL]
   , ppPrinters = do
       pp <- asks wsPP
       ws <- asks wsWindowSet
@@ -290,6 +294,9 @@ xmobarForScreen screen
           | otherwise -> ReaderT $ const Nothing
   }
   where
+    shrinkTitle mt = do
+      t <- mt
+      L.find ((<200) . length) $ shrinkIt CustomShrink t
     scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
     branchL = do
       Just ws <- logCurrentOnScreen screen
@@ -319,9 +326,13 @@ xmobarForScreen screen
       pure prettyMode
     numL = do
       ss <- withWindowSet $ return . W.screens
-      case L.find ((== screen) . W.screen) ss of
-        Just s  -> pure . fmap (show . length) . W.stack . W.workspace $ s
-        Nothing -> pure Nothing
+      pure $ onNothing "" $ case L.find ((== screen) . W.screen) ss of
+        Just s  -> fmap (\s -> show (length (W.up s) + 1) ++ "/" ++ show (length s)) . W.stack . W.workspace $ s
+        Nothing -> Nothing
+
+    onNothing x Nothing = Just x
+    onNothing _ y = y
+
     dirL = do
       Just ws <- logCurrentOnScreen screen
       proj <- fromMaybe (defProject ws) <$> lookupProject ws
@@ -340,11 +351,10 @@ xmobarForScreen screen
             a = xmobarFont 2 [x]
             b = xmobarFont 2 [y]
 
-    nerdBordersRound xs = (a ++ (xmobarColor "#2b2b2b" color xs) ++ b)
+    nerdBordersRound color xs = (a ++ (xmobarColor "#2b2b2b" color xs) ++ b)
       where [x,y] = "\57526\57524"
             a = xmobarColor color "#2b2b2b" $ xmobarFont 3 [x]
             b = xmobarColor color "#2b2b2b" $ xmobarFont 3 [y]
-            color = "#cacaca"
 
 myUrgencyHook :: Window -> X ()
 myUrgencyHook w = do
@@ -381,6 +391,8 @@ scrollableWorkspaces = HiddenNonEmptyWS :&: ignoringWSs ["NSP"]
 myServer :: [String] -> X ()
 myServer ["workspace","next"] = moveTo Next scrollableWorkspaces
 myServer ["workspace","prev"] = moveTo Prev scrollableWorkspaces
+myServer ["window","next"] = windows W.focusUp
+myServer ["window","prev"] = windows W.focusDown
 myServer ["scratchpad",x] = namedScratchpadAction scratchpads x
 myServer ["project",name] = lookupProject name >>= \case
   Nothing | null name -> safeSpawn "notify-send" ["empty project"]
@@ -545,7 +557,12 @@ myWorkspaces =
 instance Shrinker CustomShrink where
   shrinkIt s cs
     | "Kakoune" `L.isSuffixOf` cs = shrinkKak cs
-    | otherwise = shrinkIt shrinkText cs
+    | otherwise = cs : go1 cs
+    where
+      go1 "" = [""]
+      go1 xs = go (init xs)
+      go "" = [""]
+      go xs = (xs ++ "…") : go (init xs)
 
 shrinkKak cs = cs : cs' : cs'' : moarShort shortDirs
   where
