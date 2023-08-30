@@ -557,7 +557,7 @@ myWorkspaces =
 instance Shrinker CustomShrink where
   shrinkIt s cs
     | "Kakoune" `L.isSuffixOf` cs = shrinkKak cs
-    | otherwise = cs : go1 cs
+    | otherwise = cs : go1 (L.replace "/home/zubin" "~" cs)
     where
       go1 "" = [""]
       go1 xs = go (init xs)
@@ -883,7 +883,7 @@ appLaunchBindings =
     where
       namedScratchpadActions = [("M-v", mkVisualBindings (map (fmap (namedScratchpadAction scratchpads)) namedScratchpadPads))]
       screenshot opts = do
-        file <- liftIO $ formatTime defaultTimeLocale "/home/zubin/screens/%Y-%m-%d-%H%m%S_grab.png" <$> getZonedTime
+        file <- liftIO $ formatTime defaultTimeLocale "/home/zubin/screens/%Y-%m-%d-%H%M%S_grab.png" <$> getZonedTime
         safeSpawn "/home/zubin/scripts/notify-screen" (file:"--hidecursor":opts)
 
 namedScratchpadPads =
