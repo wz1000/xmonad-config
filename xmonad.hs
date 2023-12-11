@@ -599,8 +599,8 @@ scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
   , NS "ncmpcpp" (kittyPopup++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
   , NS "htop" (kittyPopup++" --class htop -e htop") (resource =? "htop") defaultFloating
-  , NS "ytop" (kittyPopup++" --class ytop -e ytop -p") (resource =? "ytop") defaultFloating
-  , NS "battop" (kittyPopup++" --class battop -e battop") (resource =? "battop") defaultFloating
+  , NS "btm" (kittyPopup++" --class btm -e btm") (resource =? "btm") defaultFloating
+  -- , NS "battop" (kittyPopup++" --class battop -e battop") (resource =? "battop") defaultFloating
   , NS "bandwhich" (kittyPopup++" --class bandwhich -e bandwhich") (resource =? "bandwhich") defaultFloating
   , NS "clerk" (kittyPopup++" --class clerk -e clerk") (className =? "clerk") defaultFloating
   , NS "calcurse" (kittyPopup++" --class calcurse -e calcurse -q") (className =? "calcurse") defaultFloating
@@ -709,7 +709,7 @@ manageApps = composeAll
     , resource =? "Dunst"              --> doIgnore
     , resource =? "scratchpad"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "htop"               --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.65)
-    , resource =? "ytop"               --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.8)
+    , resource =? "btm"                --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.8)
     , resource =? "battop"             --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.6)
     , resource =? "calcurse"           --> doRectFloat (centerAligned 0.80 (14/1080) 0.40 0.5)
     , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (14/1080) 0.58 0.6)
@@ -834,8 +834,8 @@ navMode c = Mode "nav" GrabBound $ additions
 mergeNext = hookNext "merge" True
 
 getTerm = do
-  -- Project name _ _ <- currentProject
-  let name = "regular"
+  Project name _ _ <- currentProject
+  -- let name = "regular"
   pure $ myTerm ++ " --single-instance --instance-group="++name
 
 spawnTerm = getTerm >>= spawnHere
@@ -847,13 +847,13 @@ appLaunchBindings =
     -- ,("M-S-e", spawnHere "~/scripts/kak-run -e rofi-files")
     -- ,("M-C-b", spawnHere "~/scripts/kak-run -e rofi-buffers")
     -- ,("M-S-e", mergeNext >> spawnHere "kitty -1 -e zsh -c 'source ~/.zsh_funcs && e'")
-    ,("M-S-e", mergeNext >> spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
-    ,("M-C-e", spawn "kitty -1 -e kak-project -e 'try rofi-files catch quit'")
+    ,("M-S-e", mergeNext >> getTerm >>= \term -> spawn (term ++ " -e kak-project -e 'try rofi-files catch quit'"))
+    ,("M-C-e", getTerm >>= \term -> spawn (term ++ " -e kak-project -e 'try rofi-files catch quit'"))
     -- ,("M-C-b", spawn "ROFI_SEARCH='ddgr' rofi -modi blocks -blocks-wrap rofi-search -show blocks -lines 10 -eh 4 -kb-custom-1 'Control+y' -color-window 'argb:f32b2b2b, argb:B3000000, argb:E6ffffff'")
     ,("M-u", spawn "kitty --class unicodeinp -o background_opacity=0.90 -e sh -c '(kitty +kitten unicode_input | tr -d \"\\n\"| xsel)' && xdotool click 2")
     ,("M-S-f", spawnHere =<< runInTerm Nothing "ranger")
     ,("M-g", namedScratchpadAction scratchpads "scratchpad" )
-    ,("<Insert>", pasteSelection)
+    ,("M-<Insert>", pasteSelection)
 
     ,("M-i", dynamicScratchpadAction)
     ,("M-S-i", makeDynamicScratchpad)
@@ -865,7 +865,7 @@ appLaunchBindings =
     -- ,("M-S-=", spawn "~/scripts/html.sh")
     -- ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
-    ,("M-S-c", spawn "rofi -modi 'clipboard:greenclip print' -show clipboard -run-command '{cmd}'")
+    ,("M-S-c", spawn "rofi -theme Arc-Dark -modi 'clipboard:greenclip print' -show clipboard -run-command '{cmd}'")
     ,("M-S-s", saveWindows True)
     ,("M-S-r", restoreWindows)
     ,("M-M1-<Backspace>", spawn "~/scripts/lock")
@@ -878,7 +878,7 @@ appLaunchBindings =
     ,("C-`", spawn "dunstctl history-pop")
     ,("C-<Space>", spawn "dunstctl close")
     ,("C-S-<Space>", spawn "dunstctl action 0")
-    ,("C-M1-t", scratchPieMenu)
+    ,("C-M1-t", closeOrPie)
     ] ++ namedScratchpadActions
     where
       namedScratchpadActions = [("M-v", mkVisualBindings (map (fmap (namedScratchpadAction scratchpads)) namedScratchpadPads))]
@@ -895,12 +895,22 @@ namedScratchpadPads =
   , KeyBindL "f" "mpvytdl"
   ]
 
+closeOrPie
+  = getFocused >>= \case
+      Nothing -> scratchPieMenu
+      Just w -> do
+        scratch <- isNSP w scratchpads
+        if scratch
+        then windows (W.shiftWin "NSP" w)
+        else scratchPieMenu
+
 scratchPieMenu = runProcessWithInput "pmenu" [] (unlines $ map name scratchpads) >>= namedScratchpadAction scratchpads . L.trim
 
 openGHC :: X ()
 openGHC = getSelection >>= \case
   '#':xs -> spawn $ "firefox 'https://gitlab.haskell.org/ghc/ghc/-/issues/"++xs++"'"
   '!':xs -> spawn $ "firefox 'https://gitlab.haskell.org/ghc/ghc/-/merge_requests/"++xs++"'"
+  xs -> safeSpawn "firefox" [xs]
   _ -> pure ()
 
 copyTerminal :: X ()
@@ -1088,7 +1098,11 @@ mediaBindings =
     , ("<XF86AudioRaiseVolume>" , spawn "~/scripts/dvol2 -i 2")
     , ("<XF86MonBrightnessUp>"  , spawn "light -A 5")
     , ("<XF86MonBrightnessDown>", spawn "light -U 5")
+    , ("<XF86KbdLightOnOff>"    , keyboardCycle)
     ] ++ [("M-m", mkVisualBindings mbs)]
+      ++ [("M-C-"++show n, spawn ("echo " ++ show (n-1) ++ " tog > /tmp/brightfifo")) | n <- [1..4]]
+
+
 mbs =
   [ KeyBindL "m" $ spawn "clerk -t"
   , KeyBindL "n" $ spawn "mpc next"
@@ -1096,6 +1110,16 @@ mbs =
   , KeyBindL "s" $ spawn "~/scripts/mpd-notify 8000"
   , KeyBindL "<Space>" $ spawn "mpc toggle"
   ]
+
+newtype KeyboardState = KeyboardState { getKeyboardState :: Int }
+  deriving stock (Read, Show, Typeable)
+  deriving newtype Default
+  deriving ExtensionClass via Ext PersistentE KeyboardState
+keyboardColors = ["k2v2-edges", "k2v2-yellow"]
+
+keyboardCycle = ES.modifyM' $ \(KeyboardState i) -> do
+  safeSpawn "openrgb" ["-p", keyboardColors !! (i`mod` 2)]
+  pure (KeyboardState $ (i+1) `mod` 2)
 
 myTabTheme = def { activeColor = "#cccccc"
                  , activeBorderColor = "#cccccc"
