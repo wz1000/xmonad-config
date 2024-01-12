@@ -68,7 +68,7 @@ import qualified Modal as M
 
 import Control.Monad
 import Control.Monad.Trans.Reader (ReaderT(..))
-import Control.Monad.Extra ( mapMaybeM, whenM )
+import Control.Monad.Extra ( mapMaybeM, whenM, unlessM )
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import qualified Data.List.Extra as L
@@ -104,6 +104,7 @@ import KeyDesc
 import XMonad.Actions.Submap
 import XMonad.Util.NamedActions
 import XMonad.Util.XUtils
+import Text.Printf
 
 startupApps = ["exec dunst"
               ,"exec picom"
@@ -118,7 +119,7 @@ staticProjects :: [Project]
 staticProjects =
   [ Project "main" "~" Nothing
   , Project "web" "~" (Just $ spawnOn "web" "firefox")
-  , Project "irc" "~" (Just $ spawnOn "irc" =<< sshCommand)
+  , Project "irc" "~" (Just $ (spawnOn "irc" =<< sshCommand) >> spawnOn "irc" "element-desktop")
   , Project "dev" "~" Nothing
   , Project "conf" "~" Nothing
   , Project "play" "~" Nothing
@@ -184,19 +185,64 @@ myMouseBindings = [((mod4Mask,4), const $ spawn "~/scripts/dvol2 -i 2" )
                   ,((mod4Mask .|. controlMask ,4), const $ moveTo Next scrollableWorkspaces)
                   ,((mod4Mask .|. controlMask ,5), const $ moveTo Prev scrollableWorkspaces)
                   ,((mod4Mask,2), mouseSwap)
+                  ,((mod4Mask,3), \w -> focus w >> mouseResizeWindow' w )
                   ,((mod4Mask .|. controlMask ,2), mouseMerge)
                   ]
 
+
+mouseResizeWindow' :: Window -> X ()
+mouseResizeWindow' w = whenX (isClient w) $ withDisplay $ \d -> do
+    wa <- io $ getWindowAttributes d w
+    sh <- io $ getWMNormalHints d w
+    mpos0 <- asks mousePosition
+    resizing_var <- io $ newIORef False
+    mouseDragCursor
+              (Just xC_bottom_right_corner)
+              (\ex ey -> do
+                 resizing <- io $ readIORef resizing_var
+                 if resizing
+                 then do
+                   io $ resizeWindow d w `uncurry`
+                    applySizeHintsContents sh (ex - fromIntegral (wa_x wa),
+                                               ey - fromIntegral (wa_y wa))
+                   float w
+                 else if maybe False (\pos0 -> sqrdist pos0 (ex,ey) >= 100) mpos0
+                 then do
+                   io $ warpPointer d none w 0 0 0 0 (fromIntegral (wa_width wa)) (fromIntegral (wa_height wa))
+                   io $ writeIORef resizing_var True
+                 else pure ())
+              (io (readIORef resizing_var) >>= \case False -> closeOrPie; True -> windows W.shiftMaster)
+   where
+     sqrdist (x0,y0) (x1, y1) = (x1-x0) ^2 + (y1-y0)^2
+
 mouseSwap w1 = do
+  pos0 <- asks mousePosition
   pos_r <- liftIO $ newIORef Nothing
   mouseDrag (\x y -> liftIO $ writeIORef pos_r $ Just (x,y)) $ do
     liftIO (readIORef pos_r) >>= \case
-      Nothing -> pure ()
-      Just (x,y) -> do
+      Just (x,y)
+        | Just (x0,y0) <- pos0
+        , (x-x0)^2 + (y-y0)^2 >= 100 -> do
         rects <- getAllRectangles
         whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) -> do
           swapWindows w1 w2
           windows $ W.focusWindow w1
+      _ -> greenclipCursor pos0
+
+
+greenclipCmd = "rofi -location 2 -theme dunst -modi 'clipboard:greenclip print' -show clipboard -run-command '{cmd}'"
+
+greenclipCursor :: Maybe (XMonad.Position, XMonad.Position) -> X ()
+greenclipCursor Nothing = spawn greenclipCmd
+greenclipCursor (Just (x,y)) = do
+  scr@(Rectangle scr_x scr_y scr_w scr_h) <- gets $ screenRect . W.screenDetail . W.current . windowset
+  mw <- getFocused
+  case purePlaceWindow (inBounds $ underMouse (0,0)) scr [] (x,y) (Rectangle 0 0 750 600) of
+    Rectangle rx ry rw rh ->
+      spawn $ printf "rofi -location 2 -theme dunst -modi 'clipboard:bash -c \"{ [ $ROFI_RETV -eq 0 ] || touch /tmp/gcsel ; } && greenclip print \\\"$@\\\" \" -- ' -show clipboard -run-command '{cmd}' -location 1 -theme-str 'window { x-offset: %d;y-offset: %d; width: %d; height: %d;}' && { [ -f /tmp/gcsel ] && { sleep 0.1 && xdotool type %s -- \"$(xsel -o)\" ; } ; } ; rm /tmp/gcsel"
+                     (rx-scr_x) (ry-scr_y) rw rh
+                     (case mw of Nothing -> ""; Just w -> "--window " ++ show w)
+
 
 mouseMerge w1 = do
   pos_r <- liftIO $ newIORef Nothing
@@ -206,7 +252,9 @@ mouseMerge w1 = do
       Just (x,y) -> do
         rects <- getAllRectangles
         whenJust (L.find (\(rect,_) -> pointWithin x y rect) rects) $ \(_, w2) ->
-          sendMessage $ Merge w1 w2
+          if w1 == w2
+          then sendMessage $ UnMerge w1
+          else sendMessage $ Merge w1 w2
 
 getAllRectangles = do ws <- gets windowset
                       let allWindows = join $ map (W.integrate' . W.stack)
@@ -557,10 +605,18 @@ myWorkspaces =
 instance Shrinker CustomShrink where
   shrinkIt s cs
     | "Kakoune" `L.isSuffixOf` cs = shrinkKak cs
-    | otherwise = cs : go1 (L.replace "/home/zubin" "~" cs)
+    | otherwise = cs : cs' : go1 (take 300 cs')
     where
+      cs' = L.replace "/home/zubin" "~" cs
+
       go1 "" = [""]
-      go1 xs = go (init xs)
+      go1 xs
+        | "shell in " `L.isPrefixOf` xs = let xs1 = drop 9 xs in xs1 : go1 xs1
+        | "~/" `L.isPrefixOf` xs = case break (== ':') xs of
+            (xs1,"") -> go xs1
+            (_dir,xs1) -> drop 2 xs1 : go1 (drop 2 xs1)
+        | otherwise = go (init xs)
+
       go "" = [""]
       go xs = (xs ++ "…") : go (init xs)
 
@@ -582,13 +638,13 @@ myLayout = fullscreenFloat
          $ lessBorders OnlyScreenFloat
          $ fullscreenFocus
          $ avoidStruts
-         $ toggleLayouts StateFull
+         -- $ toggleLayouts StateFull
          -- $ maximizeWithPadding 0
          $ layoutHintsWithPlacement (0.5,0.5)
          $ layouts
           where
               layouts = addTabs CustomShrink myTabTheme
-                $ trackFloating $ subLayout [] (Simplest ||| (Mirror $ Column 1)) $ mkToggle1 MIRROR myTall
+                $ trackFloating $ subLayout [] (Simplest ||| (Mirror $ Column 1)) $ (mkToggle1 MIRROR myTall ||| Full)
               myTall = spacing 0 $ resizable 40 5
               resizable step n = ResizableTall 1 (1/step) ((1/2)+n/step) [] (I [])
               -- ^ n is no of step-lengths right of center, which is used as the
@@ -601,12 +657,12 @@ scratchpads =
   , NS "htop" (kittyPopup++" --class htop -e htop") (resource =? "htop") defaultFloating
   , NS "btm" (kittyPopup++" --class btm -e btm") (resource =? "btm") defaultFloating
   -- , NS "battop" (kittyPopup++" --class battop -e battop") (resource =? "battop") defaultFloating
-  , NS "bandwhich" (kittyPopup++" --class bandwhich -e bandwhich") (resource =? "bandwhich") defaultFloating
-  , NS "clerk" (kittyPopup++" --class clerk -e clerk") (className =? "clerk") defaultFloating
-  , NS "calcurse" (kittyPopup++" --class calcurse -e calcurse -q") (className =? "calcurse") defaultFloating
+  , NS "nethogs" (kittyPopup++" --class nethogs -e nethogs") (resource =? "nethogs") defaultFloating
+  -- , NS "clerk" (kittyPopup++" --class clerk -e clerk") (className =? "clerk") defaultFloating
+  -- , NS "calcurse" (kittyPopup++" --class calcurse -e calcurse -q") (className =? "calcurse") defaultFloating
   , NS "neomutt" (kittyPopup++" --class neomutt -e neomutt") (className =? "neomutt") defaultFloating
-  , NS "mpvytdl" "notify-send 'No video scratchpad!'" (resource =? "mpvytdl") defaultFloating
-  , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
+  -- , NS "mpvytdl" "notify-send 'No video scratchpad!'" (resource =? "mpvytdl") defaultFloating
+  -- , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
   , NS "scratchpad" (unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"]) (resource =? "scratchpad") (customFloating scratchpadDefaultRect)
   ]
 
@@ -712,7 +768,7 @@ manageApps = composeAll
     , resource =? "btm"                --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.8)
     , resource =? "battop"             --> doRectFloat (centerAligned 0.75 (14/1080) 0.5 0.6)
     , resource =? "calcurse"           --> doRectFloat (centerAligned 0.80 (14/1080) 0.40 0.5)
-    , resource =? "bandwhich"          --> doRectFloat (W.RationalRect 0.42 (14/1080) 0.58 0.6)
+    , resource =? "nethogs"            --> doRectFloat (W.RationalRect 0.42 (14/1080) 1 1)
     , resource =? "neomutt"            --> doRectFloat (W.RationalRect 0.3 (0.4-22/1080) 0.7 0.6)
     , resource =? "unicodeinp"         --> doRectFloat (centerAligned 0.5 0.3 0.45 0.45)
     , resource =? "kittypopup"         --> doRectFloat (centerAligned 0.5 0.2 0.55 0.65)
@@ -727,6 +783,7 @@ manageApps = composeAll
     , className =? "mpv"               --> mergeIntoFocusedIf (not <$> className =? "firefox")
                                         <* liftX (addAction $ saveWindows False)
     , resource =? "gnome-pie"          --> doIgnore <> hasBorder False
+    , resource =? "urlscan"            --> doRectFloat (W.RationalRect 0.3 (0.4-22/1080) 0.7 0.6)
     , manageDocks
     ]
     where
@@ -776,7 +833,7 @@ killSplit = do
         Nothing -> (cur, cur ++ "-split")
         Just p -> (p, cur)
   windows $
-      (\ws -> foldr (\w r -> W.shiftWin proj w r) ws (W.index ws))
+      (\ws -> foldr (\w r -> W.swapDown $ W.shiftWin proj w r) ws (W.index ws))
     . W.view splitProj
   removeWorkspaceByTag splitProj
   windows $ W.view proj
@@ -865,7 +922,7 @@ appLaunchBindings =
     -- ,("M-S-=", spawn "~/scripts/html.sh")
     -- ,("M-S-g", spawn =<< runInTerm "aria2c" "~/scripts/download.sh $(xsel --output --clipboard)")
     ,("M-C-p", spawn "rofi-pass")
-    ,("M-S-c", spawn "rofi -theme Arc-Dark -modi 'clipboard:greenclip print' -show clipboard -run-command '{cmd}'")
+    ,("M-S-c", spawn greenclipCmd)
     ,("M-S-s", saveWindows True)
     ,("M-S-r", restoreWindows)
     ,("M-M1-<Backspace>", spawn "~/scripts/lock")
@@ -878,7 +935,7 @@ appLaunchBindings =
     ,("C-`", spawn "dunstctl history-pop")
     ,("C-<Space>", spawn "dunstctl close")
     ,("C-S-<Space>", spawn "dunstctl action 0")
-    ,("C-M1-t", closeOrPie)
+    ,("M-C-t", closeOrPie)
     ] ++ namedScratchpadActions
     where
       namedScratchpadActions = [("M-v", mkVisualBindings (map (fmap (namedScratchpadAction scratchpads)) namedScratchpadPads))]
@@ -946,7 +1003,9 @@ floatFull' sendMessage w = do
   floating <- gets $ W.floating . windowset
   let mr = M.lookup w floating
   case mr of
-    Nothing -> sendMessage ToggleLayout
+    Nothing ->
+      -- sendMessage ToggleLayout
+      sendMessage NextLayout
     Just r
       | r == W.RationalRect 0 0 1 1 -> do
           broadcastMessage $ RemoveFullscreen w
