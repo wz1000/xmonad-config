@@ -158,6 +158,7 @@ myConfig ps
   $ def
   { terminal           = myTerm
   , borderWidth        = 2
+  , focusFollowsMouse  = True
   , focusedBorderColor = "#cccccc"
   , normalBorderColor  = "#3c3c3c"
   , rootMask           = rootMask def -- .|. pointerMotionMask
@@ -172,7 +173,7 @@ myConfig ps
                        , serverModeEventHookF "XMONAD_COMMAND" (myServer . unescapeArgs)
                        , windowedFullscreenFixEventHook
                        ]
-  , logHook            = colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
+  , logHook            = colorMarked <> runAllPending -- <> updatePointer (0.5, 0.5) (0.9, 0.9)
   , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir >> toggleScreens
   } `additionalKeysP` myKeyBindings
     `removeMouseBindings` (map fst myMouseBindings)
@@ -344,7 +345,7 @@ xmobarForScreen screen
   where
     shrinkTitle mt = do
       t <- mt
-      L.find ((<200) . length) $ shrinkIt CustomShrink t
+      L.find ((<150) . length) $ shrinkIt CustomShrink t
     scroll = xmobarAction "xmonadctl workspace prev" "4" . xmobarAction "xmonadctl workspace next" "5"
     branchL = do
       Just ws <- logCurrentOnScreen screen
