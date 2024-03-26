@@ -27,6 +27,7 @@ import XMonad.Layout.Simplest
 import XMonad.Layout.Maximize
 -- import XMonad.Layout.LayoutCombinators
 import XMonad.Hooks.EwmhDesktops
+import XMonad.Hooks.FadeWindows
 import XMonad.Hooks.UrgencyHook
 import XMonad.Hooks.ServerMode
 import XMonad.Hooks.ManageDocks
@@ -133,7 +134,7 @@ myEwmh :: XConfig a -> XConfig a
 myEwmh c =
   c { startupHook     = ewmhDesktopsStartup <> startupHook c
     , handleEventHook = ewmhDesktopsEventHookCustom customFilter <> handleEventHook c
-    , logHook         = ewmhDesktopsLogHookCustom customFilter <> logHook c
+    , logHook         = ewmhDesktopsLogHookCustom customFilter <> logHook c <> fadeWindowsLogHook myFadeHook
     }
  where
    customFilter = filter $ (/= "NSP") . W.tag
@@ -172,8 +173,9 @@ myConfig ps
                        , hintsEventHook
                        , serverModeEventHookF "XMONAD_COMMAND" (myServer . unescapeArgs)
                        , windowedFullscreenFixEventHook
+                       , fadeWindowsEventHook
                        ]
-  , logHook            = colorMarked <> runAllPending -- <> updatePointer (0.5, 0.5) (0.9, 0.9)
+  , logHook            = colorMarked <> runAllPending <> updatePointer (0.5, 0.5) (0.9, 0.9)
   , startupHook        = mapM_ spawn startupApps >> checkKeymap (myConfig ps) myKeyBindings >> setProjectDir >> toggleScreens
   } `additionalKeysP` myKeyBindings
     `removeMouseBindings` (map fst myMouseBindings)
@@ -655,6 +657,7 @@ kittyPopup = "kitty -1 -o background_opacity=0.95"
 scratchpads =
   [ NS "pavucontrol" "pavucontrol" (resource =? "pavucontrol") defaultFloating
   , NS "ncmpcpp" (kittyPopup++" --class ncmpcpp -e ncmpcpp") (resource =? "ncmpcpp") defaultFloating
+  , NS "qalc" "qalculate-gtk" (resource =? "qalculate-gtk") defaultFloating
   , NS "htop" (kittyPopup++" --class htop -e htop") (resource =? "htop") defaultFloating
   , NS "btm" (kittyPopup++" --class btm -e btm") (resource =? "btm") defaultFloating
   -- , NS "battop" (kittyPopup++" --class battop -e battop") (resource =? "battop") defaultFloating
@@ -750,6 +753,8 @@ runAllPending = do
   ES.put (PendingActions [])
   sequence_ $ reverse xs
 
+myFadeHook = resource =? "qalculate-gtk" --> transparency 0.1
+
 manageApps = composeAll
     [ isFullscreen                     --> doFullFloat
     , stringProperty "WM_WINDOW_ROLE" =? "PictureInPicture"  --> placeHook (smart (0,1)) <> doFloat
@@ -776,6 +781,7 @@ manageApps = composeAll
     , resource =? "xmonadrestart"      --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
     , resource =? "xmessage"           --> doRectFloat (centerAligned 0.5 0.3 0.35 0.35)
     , resource =? "ncmpcpp"            --> doRectFloat (centerAligned 0.5 (14/1080) (2/3) 0.6)
+    , resource =? "qalculate-gtk"      --> doRectFloat (centerAligned 0.5 (2/1080) (1/2.6) 0.1) <+> hasBorder False
     , resource =? "clerk"              --> placeHook ( fixed (0.5,55/1080) ) <> doFloat
     , resource =? "org.pwmt.zathura"   --> mergeIntoFocusedIf (not <$> className =? "firefox")
                                         <* liftX (addAction $ saveWindows False)
@@ -1058,7 +1064,7 @@ xmonadControlKeys =
     ,("a", mergeMarked)
     ,("s", swapWithMarked)
     ,("o", shiftMarked)
-    ,("c", spawn "LANG=en_IN.UTF-8 rofi -show calc -theme Arc-Dark -location 2 -no-show-match -no-sort -calc-command \"echo -n '{result}' | xsel -b\" ")
+    ,("c", namedScratchpadAction scratchpads "qalc")
     ,("S-a", unmergeFocused)
     ,("[", onGroup W.focusUp')
     ,("]", onGroup W.focusDown')
