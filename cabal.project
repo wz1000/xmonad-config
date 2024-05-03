@@ -6,8 +6,8 @@ packages:
 
 constraints: xmobar +all_extensions +with_xft
 profiling: False
-with-compiler: ghc-9.2
-index-state: 2023-09-30T06:54:08Z
+with-compiler: ghc-9.6.5
+index-state: 2024-05-03T06:17:18Z
 
 -- package *
 --   ghc-options: -finfo-table-map -fdistinct-constructor-tables

@@ -28,7 +28,7 @@ module Grab (
 ) where
 
 -- core
-import XMonad
+import XMonad hiding (mkGrabs)
 
 -- base
 import qualified Data.Map.Strict as M

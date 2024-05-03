@@ -153,7 +153,7 @@ myConfig ps
   -- $ withUrgencyHookC myUrgencyHook urgencyConfig{ suppressWhen = Focused }
   $ withNavigation2DConfig ( def { defaultTiledNavigation = centerNavigation } )
   $ docks
-  $ dynamicSBs myBarConfigs
+  $ dynamicSBs (liftIO . myBarConfigs)
   $ modal regularMode
   $ myEwmh
   $ def
@@ -665,8 +665,8 @@ scratchpads =
   -- , NS "clerk" (kittyPopup++" --class clerk -e clerk") (className =? "clerk") defaultFloating
   -- , NS "calcurse" (kittyPopup++" --class calcurse -e calcurse -q") (className =? "calcurse") defaultFloating
   , NS "neomutt" (kittyPopup++" --class neomutt -e neomutt") (className =? "neomutt") defaultFloating
-  -- , NS "mpvytdl" "notify-send 'No video scratchpad!'" (resource =? "mpvytdl") defaultFloating
-  -- , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
+  , NS "mpvytdl" "notify-send 'No video scratchpad!'" (resource =? "mpvytdl") defaultFloating
+  , NS "dynamic" ("notify-send 'No dynamic scratchpad!'") dynamicScratchpadQuery defaultFloating
   , NS "scratchpad" (unwords ["cd ~;",kittyPopup,"--class scratchpad -e ~/scripts/detachable"]) (resource =? "scratchpad") (customFloating scratchpadDefaultRect)
   ]
 
