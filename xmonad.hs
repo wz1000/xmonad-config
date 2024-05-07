@@ -35,6 +35,7 @@ import XMonad.Hooks.ManageHelpers
 import XMonad.Hooks.InsertPosition
 import XMonad.Hooks.Place
 import XMonad.Hooks.ToggleHook
+import XMonad.Hooks.FloatConfigureReq
 import XMonad.Layout.ToggleLayouts
 import XMonad.Layout.TrackFloating
 import XMonad.Layout.LayoutModifier
@@ -133,7 +134,7 @@ myTerm = "kitty"
 myEwmh :: XConfig a -> XConfig a
 myEwmh c =
   c { startupHook     = ewmhDesktopsStartup <> startupHook c
-    , handleEventHook = ewmhDesktopsEventHookCustom customFilter <> handleEventHook c
+    , handleEventHook = ewmhDesktopsEventHookCustom customFilter <> fixSteamFlicker <> handleEventHook c
     , logHook         = ewmhDesktopsLogHookCustom customFilter <> logHook c <> fadeWindowsLogHook myFadeHook
     }
  where
